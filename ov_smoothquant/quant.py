@@ -31,8 +31,6 @@ def to_smooth_quant_model(model, fc_act_ic_absmax, alpha = 0.8):
 
             X_max_abs = fc_act_ic_absmax[root.get_friendly_name()]
 
-            X_max_abs[X_max_abs > 200] = 200
-
             # weight matrix: [OC, IC]
             const_weight = pvm[wei].get_node()
             if const_weight.get_type_name() == "Convert":
@@ -73,17 +71,17 @@ def to_smooth_quant_model(model, fc_act_ic_absmax, alpha = 0.8):
                 per_channel_alpha = 0.8
             '''
 
-            per_token_quant = False
-            if "mlp.down_proj" in root.get_friendly_name():
-                quant_activation = False
-                #per_token_quant = True
-                pass
-
             px = pow(X_max_abs, per_channel_alpha)
             pw = pow(weight_abs_max, 1 - per_channel_alpha)
             # pw = px
             smoothquant_w_scales = (px / pw).clip(min=1e-5)
             smoothquant_x_scales = 1/smoothquant_w_scales
+
+            per_token_quant = False
+            if "mlp.down_proj" in root.get_friendly_name():
+                #quant_activation = False
+                per_token_quant = True
+                pass
 
             # clear outlier channel from quantization branch
             outlier_idx = (X_max_abs > 100)
@@ -144,16 +142,14 @@ def to_smooth_quant_model(model, fc_act_ic_absmax, alpha = 0.8):
             # new_matmul = opset.matmul(act_smoothed, op.Constant(weight), transpose_a, transpose_b, name = root.get_friendly_name())
             replace_node(root, new_matmul)
 
-            print(f"{'Q' if quant_activation else ' '} Outlier:{outlier_cnt} {layer_id} {root.get_friendly_name()} {smoothquant_x_scales.shape} {smoothquant_w_scales.shape}  w_scales : {w_deq_scales.shape}  {smoothquant_x_scales.min():.3f}~{smoothquant_x_scales.max():.3f}  {X_max_abs.min():.3f}~{X_max_abs.max():.3f} =>  {xmin:.3f}~{xmax:.3f}")
-            #print(f"\t mean:{X_max_abs.mean()}  big:{X_max_abs[X_max_abs > 10]}")
+            X_maxabs_thr = max(10*X_max_abs.mean(), 30)
+            print(f"{'Q' if quant_activation else ' '} Outlier:{outlier_cnt} {layer_id} {root.get_friendly_name()} {smoothquant_x_scales.min():.3f}~{smoothquant_x_scales.max():.3f}  {X_max_abs.min():.3f}~{X_max_abs.max():.3f} =>  {xmin:.3f}~{xmax:.3f} mean:{X_max_abs.mean():.3f}  big:{X_max_abs[X_max_abs > X_maxabs_thr]}")
             return True
         return Matcher(matmul, "SimpleReplacement"), callback
     manager = Manager()
     manager.register_pass(MatcherPass(*pattern_replacement()))
     manager.run_passes(model)
     return
-
-
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-a", "--alpha", type=float, default=0.5)

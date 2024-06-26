@@ -7,7 +7,13 @@ But it's not easy to keep accuracy of the quantized model, Intel® Neural Compre
 OpenVINO backend for HF pipeline is [optimum-intel](https://github.com/huggingface/optimum-intel/), and the model exported by `optimum-cli` only support weight-only quantization of int8(or int4).
 
 
-##
+## Llama-2-7b
+ - Using alpha=0.85
+ - weight is per-OC quantized
+ - must use per-token quantization for activation (at least for mlp.down_proj)
+ - very few channel has very large absmax (>100), and must be calculated separately
+
+## Command lines
 
 ```bash
 # download wikitext-2
