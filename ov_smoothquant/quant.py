@@ -10,7 +10,7 @@ from openvino.runtime.utils import replace_node
 import tqdm
 import pickle, sys, time, argparse
 
-def to_smooth_quant_model(model, fc_act_ic_absmax, alpha = 0.8):
+def to_smooth_quant_model(model, fc_act_ic_absmax, skip_act_quant_names=[], alpha = 0.8):
     # Simple: for Extensions. Without any classes and inheritance.
     def pattern_replacement():
         act = AnyInput()
@@ -28,6 +28,7 @@ def to_smooth_quant_model(model, fc_act_ic_absmax, alpha = 0.8):
             
             #if not "__module.model.layers.1.mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
             #    return False
+            # __module.model.transformer.h.2.mlp.fc_out/aten::linear/MatMul
 
             X_max_abs = fc_act_ic_absmax[root.get_friendly_name()]
 
@@ -51,12 +52,16 @@ def to_smooth_quant_model(model, fc_act_ic_absmax, alpha = 0.8):
             # s : each IC channel of weight matrix * s
             # use big alpha, for bigger outlier |X|, so x_scale can scale it down further
 
-            per_channel_alpha = (X_max_abs * 0 + 0.85)
+            per_channel_alpha = (X_max_abs * 0 + alpha)
             #per_channel_alpha[X_max_abs > 10] = 0.7
             #per_channel_alpha[X_max_abs > 100] = 0.8
 
-            layer_id = int(root.get_friendly_name().split(".")[3])
+            layer_id = 0 # int(root.get_friendly_name().split(".")[3])
             quant_activation = True
+
+            for skip_name in skip_act_quant_names:
+                if skip_name in root.get_friendly_name():
+                    quant_activation = False
 
             '''
             if "__module.model.layers.1.mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
@@ -158,6 +163,8 @@ parser.add_argument("-s", "--act_scales_path", type=str, required=True, help="ta
                     default="act_scales/llama-2-7b.pickle")
 parser.add_argument("-p", "--prompt", type=str, default="What's oxygen?")
 
+parser.add_argument("--skip", type=str, nargs='*')
+
 parser.add_argument("-o", "--output_model_path", type=str, help="target model path", default=None)
 
 args = parser.parse_args()
@@ -217,7 +224,7 @@ ov_model = OVModelForCausalLM.from_pretrained(
 )
 ref_answer = test_one_shot(ov_model)
 
-to_smooth_quant_model(ov_model.model, fc_act_ic_absmax)
+to_smooth_quant_model(ov_model.model, fc_act_ic_absmax, alpha = args.alpha, skip_act_quant_names=args.skip)
 
 print("recompile...")
 ov_model.request = None

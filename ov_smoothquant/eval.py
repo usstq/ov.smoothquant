@@ -136,7 +136,7 @@ parser.add_argument('-r', '--repeats', type=int, default=1)
 parser.add_argument('-e', '--export', action="store_true")
 
 parser.add_argument("-ppl", type=str, default=None)
-parser.add_argument("-ppl-chunk", type=int, default=512)
+parser.add_argument("-c", "--ppl-chunk", type=int, default=512)
 
 parser.add_argument('model_path')
 

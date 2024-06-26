@@ -22,7 +22,14 @@ def get_min_max_model(model):
             root = matcher.get_match_root()
             pvm = matcher.get_pattern_value_map()
 
-            if not ("_proj/aten::linear/MatMul" in root.get_friendly_name()):
+            is_expected = False
+            if "_proj/aten::linear/MatMul" in root.get_friendly_name(): is_expected = True
+            if ".mlp.fc_in/aten::linear/MatMul" in root.get_friendly_name(): is_expected = True
+            if ".mlp.fc_out/aten::linear/MatMul" in root.get_friendly_name(): is_expected = True
+            if ".lm_head/aten::linear/MatMul" in root.get_friendly_name(): is_expected = True
+
+            if not is_expected:
+                print("skipped: ", root.get_friendly_name())
                 return False
 
             #print(root, pvm[act].get_node())
