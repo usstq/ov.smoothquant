@@ -20,5 +20,6 @@ optimum-cli export openvino --fp16 --task text-generation-with-past -m ./meta-ll
 # calibration: generate abs max for each activations of Linear/FC layer
 python ./ov_smoothquant/generate_act_scales.py -c=wikitext-2-raw/wiki.test.raw -m ~/models/Llama-2-7b-hf-ov/ -s 128 ./act_scales/Llama-2-7b-hf.pickle
 
-
+# quantize using SmoothQuant
+python ./ov_smoothquant/quant.py -m ~/models/Llama-2-7b-hf-ov/ -s ./act_scales/Llama-2-7b-hf.pickle -o ./models/Llama-2-7b-hf-SQ
 ```
