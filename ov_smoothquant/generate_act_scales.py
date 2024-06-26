@@ -87,7 +87,7 @@ def get_fc_observations(model_path, calibration_txtfile, chunk_size = 128, total
     if total_size_limit == 0:
         total_size_limit = input_ids.shape[1]
     else:
-        total_size_limit = max(total_size_limit, input_ids.shape[1])
+        total_size_limit = min(total_size_limit, input_ids.shape[1])
     progress_bar = tqdm.tqdm(range(0, total_size_limit, chunk_size))
 
     for i0 in progress_bar:
@@ -129,13 +129,13 @@ def get_fc_observations(model_path, calibration_txtfile, chunk_size = 128, total
         mean_absmax = np.mean(the_absmax)
         if mean_absmax < 0.5:
             mean_absmax = 0.5
-        outlier_idx = (the_max_abs > 20 * mean_absmax)
+        outlier_idx = (the_absmax > 20 * mean_absmax)
 
         if (outlier_idx.sum() > 0):
             print(fc_name, mean_absmax)
             print("  ", the_min[outlier_idx])
             print("  ", the_max[outlier_idx])
-            print("  ", the_max_abs[outlier_idx])
+            print("  ", the_absmax[outlier_idx])
 
 
     return fc_act_ic_absmax
