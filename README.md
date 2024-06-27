@@ -7,11 +7,31 @@ But it's not easy to keep accuracy of the quantized model, Intel® Neural Compre
 OpenVINO backend for HF pipeline is [optimum-intel](https://github.com/huggingface/optimum-intel/), and the model exported by `optimum-cli` only support weight-only quantization of int8(or int4).
 
 
+
 ## Llama-2-7b
- - Using alpha=0.85
- - weight is per-OC quantized
+To keep accuracy better, we need:
+ - weight must be per-OC INT8-quantized (symmetrically)
+ - Using relatively high alpha `alpha=0.85`
  - must use per-token quantization for activation (at least for mlp.down_proj)
- - very few channel has very large absmax (>100), and must be calculated separately
+   or skip some mlp.down_proj layers:
+```bash
+# __module.model.layers.1.mlp.down_proj/aten::linear/MatMul
+# __module.model.layers.8.mlp.down_proj/aten::linear/MatMul
+# __module.model.layers.10.self_attn.q_proj/aten::linear/MatMul & k & v
+# __module.model.layers.26.mlp.down_proj/aten::linear/MatMul
+# __module.model.layers.27.mlp.down_proj/aten::linear/MatMul
+# __module.model.layers.28.mlp.down_proj/aten::linear/MatMul
+# __module.model.layers.29.mlp.down_proj/aten::linear/MatMul
+# __module.model.layers.30.mlp.down_proj/aten::linear/MatMul
+# __module.model.layers.31.mlp.down_proj/aten::linear/MatMul
+python ./ov_smoothquant/quant.py -m ~/tingqian/models/Llama-2-7b-hf-ov/ -s ./act_scales/Llama-2-7b-hf.pickle -o ./models/Llama-2-7b-hf-SQ -a 0.9 -skip .8.mlp.down_proj .31.mlp.down_proj .30.mlp.down_proj .1.mlp.down_proj .29.mlp.down_proj
+
+```
+ - very few channel has very large absmax (>100), and must be calculated separately using FP16/FP32/BF16 like [LLM.int8()](https://arxiv.org/abs/2208.07339)
+
+## gpt-j-6b
+
+
 
 ## Command lines
 
@@ -42,3 +62,7 @@ python ov_smoothquant/eval.py ./models/gpt-j-6b-SQ/ -ppl wikitext-2-raw/wiki.tes
 PPL: 13.64 @ ppl-chunk 128  0.85
 
 ```
+
+
+
+

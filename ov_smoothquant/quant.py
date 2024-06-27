@@ -67,8 +67,16 @@ def to_smooth_quant_model(model, fc_observations, skip_act_quant_names=[], act_q
                     if skip_name in root.get_friendly_name():
                         quant_activation = False
 
-            if "__module.model.layers.25.mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
-                quant_activation = True
+            if ".mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
+                layer_id = int(root.get_friendly_name().split(".")[3])
+                # layer_id == 25 : PPL: 5.65
+                # PPL: 5.67   0.85
+                if layer_id >= 0:
+                    per_channel_alpha = 0.85
+                    quant_activation = True
+                if layer_id == 1 or layer_id >= 25:
+                    per_channel_alpha = 0.87
+                    quant_activation = True
 
             '''
             if "__module.model.layers.1.mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
@@ -164,7 +172,7 @@ def to_smooth_quant_model(model, fc_observations, skip_act_quant_names=[], act_q
             replace_node(root, new_matmul)
 
             X_maxabs_thr = max(10*X_absmax.mean(), 30)
-            print(f"{'Q' if quant_activation else ' '} Outlier:{outlier_cnt} {layer_id} {root.get_friendly_name()} {smoothquant_x_scales.min():.2f}~{smoothquant_x_scales.max():.2f}  {X_min.min():.2f}~{X_max.max():.2f} =>  {x_min_per_tensor:.2f}~{x_max_per_tensor:.2f} mean:{X_absmax.mean():.3f}  big:{X_absmax[X_absmax > X_maxabs_thr]}")
+            print(f"{'Q' if quant_activation else ' '} Outlier:{outlier_cnt} {layer_id} {root.get_friendly_name()} [x:{smoothquant_x_scales.min():.2f}~{smoothquant_x_scales.max():.2f} w:{smoothquant_w_scales.min():.2f}~{smoothquant_w_scales.max():.2f}]  {X_min.min():.2f}~{X_max.max():.2f} =>  {x_min_per_tensor:.2f}~{x_max_per_tensor:.2f} mean:{X_absmax.mean():.3f}  big:{X_absmax[X_absmax > X_maxabs_thr]}")
             return True
         return Matcher(matmul, "SimpleReplacement"), callback
     manager = Manager()

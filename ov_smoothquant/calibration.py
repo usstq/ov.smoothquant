@@ -101,7 +101,7 @@ import argparse
 import tqdm
 
 parser = argparse.ArgumentParser()
-parser.add_argument("-d", "--dataset-path", type=str, required=True, default="./val.jsonl.zst", help="location of the calibration dataset, we use the validation set of the Pile dataset")
+parser.add_argument("-d", "--dataset-path", type=str, default="./pile-rnd512.val.jsonl.zst", help="location of the calibration dataset, we use the validation set of the Pile dataset")
 parser.add_argument("-m", "--model_path", type=str, required=True, help="raw openvino IR (OVModelForCausalLM) export by optimum-cli")
 parser.add_argument("act_minmax_path", type=str, help="target pickle file for storing calibration result",
                     default="act_scales/llama-2-7b.pickle")
