@@ -85,6 +85,8 @@ parser.add_argument('-s', '--smaps', action="store_true")
 parser.add_argument('-r', '--repeats', type=int, default=1)
 parser.add_argument('-e', '--export', action="store_true")
 
+parser.add_argument('-kvq', '--kvquant', action="store_true")
+
 parser.add_argument("-ppl", type=str, default=None)
 parser.add_argument("-c", "--ppl-chunk", type=int, default=512)
 
@@ -117,6 +119,9 @@ if args.bf16:
 
 if args.f32:
     ov_config["INFERENCE_PRECISION_HINT"] = "f32"
+ 
+if args.kvquant:
+    ov_config["KV_CACHE_PRECISION"] = "u8"
 
 if args.dynamic_quantization_group_size > 0:
     ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"] = str(args.dynamic_quantization_group_size)
