@@ -49,10 +49,10 @@ python ./ov_smoothquant/generate_act_scales.py -c=wikitext-2-raw/wiki.test.raw -
 # quantize using SmoothQuant
 python ./ov_smoothquant/quant.py -m ~/models/Llama-2-7b-hf-ov/ -s ./act_scales/Llama-2-7b-hf.pickle -o ./models/Llama-2-7b-hf-SQ
 
-
 python ./ov_smoothquant/quant.py -m /home/sdp/huyuan/dlboost_models/llama-2-7b-chat/pytorch/FP32/ -s ./act_scales/Llama-2-7b-hf.pickle -o ./models/Llama-2-7b-hf-SQ
-python ./ov_smoothquant/quant.py -m /home/sdp/huyuan/dlboost_models/gpt-j-6b/pytorch/FP32/ -s ./act_scales/gpt-j-6b.pickle -o ./models/gpt-j-6b-SQ -a 0.5
 
+# gpt-j-6b PPL: 13.18
+python ./ov_smoothquant/quant.py -m /home/sdp/huyuan/dlboost_models/gpt-j-6b/pytorch/FP32/ -s ./act_scales/gpt-j-6b.pickle -o ./models/gpt-j-6b-SQ -a 0.85 --skip h.2.mlp.fc_out
 
 # evaluate PPL
 python ov_smoothquant/eval.py /home/sdp/huyuan/dlboost_models/gpt-j-6b/pytorch/FP32/ -ppl wikitext-2-raw/wiki.test.raw -c 128
@@ -64,5 +64,14 @@ PPL: 13.64 @ ppl-chunk 128  0.85
 ```
 
 
+/home/spr_models/gpt-j-6b/pytorch/INT8_compressed_weights
+2024-06-26 07:39:35,788 - root - INFO - |     Task     |Version|Metric|Value |   |Stderr|
+2024-06-26 07:39:35,788 - root - INFO - |--------------|------:|------|-----:|---|-----:|
+2024-06-26 07:39:35,788 - root - INFO - |lambada_openai|      0|ppl   |4.1192|±  |0.0889|
+2024-06-26 07:39:35,788 - root - INFO - |              |       |acc   |0.6765|±  |0.0065|
 
-
+/models/gpt-j-6b-SQ/
+2024-06-26 08:06:30,120 - root - INFO - |     Task     |Version|Metric|Value |   |Stderr|
+2024-06-26 08:06:30,120 - root - INFO - |--------------|------:|------|-----:|---|-----:|
+2024-06-26 08:06:30,120 - root - INFO - |lambada_openai|      0|ppl   |4.0520|±  |0.0887|
+2024-06-26 08:06:30,120 - root - INFO - |              |       |acc   |0.6852|±  |0.0065|

@@ -66,7 +66,7 @@ def to_smooth_quant_model(model, fc_observations, skip_act_quant_names=[], act_q
                 for skip_name in skip_act_quant_names:
                     if skip_name in root.get_friendly_name():
                         quant_activation = False
-
+            '''
             if ".mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
                 layer_id = int(root.get_friendly_name().split(".")[3])
                 # layer_id == 25 : PPL: 5.65
@@ -78,7 +78,7 @@ def to_smooth_quant_model(model, fc_observations, skip_act_quant_names=[], act_q
                     per_channel_alpha = 0.87
                     quant_activation = True
 
-            '''
+            
             if "__module.model.layers.1.mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
                 quant_activation = False
             #if "__module.model.layers.30.mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
