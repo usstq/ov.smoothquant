@@ -9,8 +9,9 @@ from openvino.runtime.passes import Manager, Matcher, MatcherPass, WrapType, Any
 from openvino.runtime.utils import replace_node
 import tqdm
 import pickle, sys, time, argparse
+from ppl import perplexity_ov
 
-def to_smooth_quant_model(model, fc_act_ic_absmax, skip_act_quant_names=[], alpha = 0.8):
+def to_smooth_quant_model(model, fc_observations, skip_act_quant_names=[], act_quant_sym = False, outlier_thr = 1e9, alpha = 0.8):
     # Simple: for Extensions. Without any classes and inheritance.
     def pattern_replacement():
         act = AnyInput()
@@ -23,14 +24,16 @@ def to_smooth_quant_model(model, fc_act_ic_absmax, skip_act_quant_names=[], alph
             transpose_a = False
             transpose_b = True
 
-            if not root.get_friendly_name() in fc_act_ic_absmax:
+            if not root.get_friendly_name() in fc_observations:
                 return False
-            
+
             #if not "__module.model.layers.1.mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
             #    return False
             # __module.model.transformer.h.2.mlp.fc_out/aten::linear/MatMul
 
-            X_max_abs = fc_act_ic_absmax[root.get_friendly_name()]
+            X_min = fc_observations[root.get_friendly_name()]["min"]
+            X_max = fc_observations[root.get_friendly_name()]["max"]
+            X_absmax = fc_observations[root.get_friendly_name()]["absmax"]
 
             # weight matrix: [OC, IC]
             const_weight = pvm[wei].get_node()
@@ -47,21 +50,25 @@ def to_smooth_quant_model(model, fc_act_ic_absmax, skip_act_quant_names=[], alph
 
             # smooth-quant:
             weight_abs_max = abs(weight).max(0).clip(min=1e-5)
-            assert(X_max_abs.min() > 0)
+            assert(X_absmax.min() > 0)
 
             # s : each IC channel of weight matrix * s
             # use big alpha, for bigger outlier |X|, so x_scale can scale it down further
 
-            per_channel_alpha = (X_max_abs * 0 + alpha)
-            #per_channel_alpha[X_max_abs > 10] = 0.7
-            #per_channel_alpha[X_max_abs > 100] = 0.8
+            per_channel_alpha = (X_absmax * 0 + alpha)
+            #per_channel_alpha[X_absmax > 10] = 0.7
+            #per_channel_alpha[X_absmax > 100] = 0.8
 
             layer_id = 0 # int(root.get_friendly_name().split(".")[3])
             quant_activation = True
 
-            for skip_name in skip_act_quant_names:
-                if skip_name in root.get_friendly_name():
-                    quant_activation = False
+            if skip_act_quant_names is not None:
+                for skip_name in skip_act_quant_names:
+                    if skip_name in root.get_friendly_name():
+                        quant_activation = False
+
+            if "__module.model.layers.25.mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
+                quant_activation = True
 
             '''
             if "__module.model.layers.1.mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
@@ -76,20 +83,20 @@ def to_smooth_quant_model(model, fc_act_ic_absmax, skip_act_quant_names=[], alph
                 per_channel_alpha = 0.8
             '''
 
-            px = pow(X_max_abs, per_channel_alpha)
+            px = pow(X_absmax, per_channel_alpha)
             pw = pow(weight_abs_max, 1 - per_channel_alpha)
             # pw = px
             smoothquant_w_scales = (px / pw).clip(min=1e-5)
             smoothquant_x_scales = 1/smoothquant_w_scales
 
             per_token_quant = False
-            if "mlp.down_proj" in root.get_friendly_name():
-                #quant_activation = False
-                per_token_quant = True
-                pass
+            #if "mlp.down_proj" in root.get_friendly_name():
+            #    #quant_activation = False
+            #    per_token_quant = True
+            #    pass
 
             # clear outlier channel from quantization branch
-            outlier_idx = (X_max_abs > 100)
+            outlier_idx = (X_absmax > outlier_thr)
             outlier_cnt = outlier_idx.sum()
             if quant_activation and outlier_cnt > 0 :
                 smoothquant_x_scales[outlier_idx] = 0
@@ -100,12 +107,15 @@ def to_smooth_quant_model(model, fc_act_ic_absmax, skip_act_quant_names=[], alph
                 outlier_result = None
 
             # [OC, IC] * [IC]
-            weight = weight * smoothquant_w_scales
-
-            act_smoothed = opset.multiply(pvm[act], op.Constant(smoothquant_x_scales))
-
-            xmax = (X_max_abs * smoothquant_x_scales).max()
-            xmin = (X_max_abs * smoothquant_x_scales).min()
+            if quant_activation:
+                weight = weight * smoothquant_w_scales
+                act_smoothed = opset.multiply(pvm[act], op.Constant(smoothquant_x_scales))
+                x_min_per_tensor = (X_min * smoothquant_x_scales).min()
+                x_max_per_tensor = (X_max * smoothquant_x_scales).max()
+            else:
+                act_smoothed = pvm[act]
+                x_min_per_tensor = X_min.min()
+                x_max_per_tensor = X_max.max()
 
             # quantize weight to INT8 on per-OC basis
             # per-tensor quantized is not working
@@ -115,21 +125,28 @@ def to_smooth_quant_model(model, fc_act_ic_absmax, skip_act_quant_names=[], alph
             weight_quant = (weight / w_deq_scales).round().astype(np.int8)
             w_deq = opset.multiply(opset.convert(op.Constant(weight_quant), Type.f32), op.Constant(w_deq_scales))
 
+            # symmetrical quantization has lower accuracy than asymmetrical
+            if act_quant_sym:
+                absmax = max(abs(x_min_per_tensor), abs(x_max_per_tensor))
+                x_min_per_tensor = -absmax
+                x_max_per_tensor = absmax
+
             if quant_activation:
                 levels = np.int32(256)
 
-                input_low = np.array(-xmax, dtype=np.float32)
-                input_high = np.array(xmax, dtype=np.float32)
-                output_low = np.array(-xmax, dtype=np.float32)
-                output_high = np.array(xmax, dtype=np.float32)
-
-                # per-token
                 if per_token_quant:
+                    # per-token dynamic, need special impl
                     absmax_per_token = opset.reduce_max(opset.absolute(act_smoothed), [0, 1], keep_dims = True)
                     input_low = opset.negative(absmax_per_token)
                     output_low = opset.negative(absmax_per_token)
                     input_high = absmax_per_token
                     output_high = absmax_per_token
+                else:
+                    # per-tensor static (easier for impl to speed-up)
+                    input_low = np.array(x_min_per_tensor, dtype=np.float32)
+                    input_high = np.array(x_max_per_tensor, dtype=np.float32)
+                    output_low = np.array(x_min_per_tensor, dtype=np.float32)
+                    output_high = np.array(x_max_per_tensor, dtype=np.float32)
 
                 act_fq = opset.fake_quantize(act_smoothed,
                                             input_low,
@@ -144,11 +161,10 @@ def to_smooth_quant_model(model, fc_act_ic_absmax, skip_act_quant_names=[], alph
             if outlier_result is not None:
                 new_matmul = opset.add(new_matmul, outlier_result, name="AddOutlier")
 
-            # new_matmul = opset.matmul(act_smoothed, op.Constant(weight), transpose_a, transpose_b, name = root.get_friendly_name())
             replace_node(root, new_matmul)
 
-            X_maxabs_thr = max(10*X_max_abs.mean(), 30)
-            print(f"{'Q' if quant_activation else ' '} Outlier:{outlier_cnt} {layer_id} {root.get_friendly_name()} {smoothquant_x_scales.min():.3f}~{smoothquant_x_scales.max():.3f}  {X_max_abs.min():.3f}~{X_max_abs.max():.3f} =>  {xmin:.3f}~{xmax:.3f} mean:{X_max_abs.mean():.3f}  big:{X_max_abs[X_max_abs > X_maxabs_thr]}")
+            X_maxabs_thr = max(10*X_absmax.mean(), 30)
+            print(f"{'Q' if quant_activation else ' '} Outlier:{outlier_cnt} {layer_id} {root.get_friendly_name()} {smoothquant_x_scales.min():.2f}~{smoothquant_x_scales.max():.2f}  {X_min.min():.2f}~{X_max.max():.2f} =>  {x_min_per_tensor:.2f}~{x_max_per_tensor:.2f} mean:{X_absmax.mean():.3f}  big:{X_absmax[X_absmax > X_maxabs_thr]}")
             return True
         return Matcher(matmul, "SimpleReplacement"), callback
     manager = Manager()
@@ -163,25 +179,28 @@ parser.add_argument("-s", "--act_scales_path", type=str, required=True, help="ta
                     default="act_scales/llama-2-7b.pickle")
 parser.add_argument("-p", "--prompt", type=str, default="What's oxygen?")
 
-parser.add_argument("--skip", type=str, nargs='*')
-
+parser.add_argument("-skip", "--skip", type=str, nargs='*')
+parser.add_argument("-othr", "--outlier_thr", type=float, default=1e9)
 parser.add_argument("-o", "--output_model_path", type=str, help="target model path", default=None)
+
+parser.add_argument("-ppl", type=str, default=None)
 
 args = parser.parse_args()
 
 handle = open(args.act_scales_path, 'rb')
 with handle:
-    fc_act_ic_absmax = pickle.load(handle)
+    fc_observations = pickle.load(handle)
 
-print("=== show outlier channel's max abs activations observed ===")
-for fc_name in fc_act_ic_absmax:
-    the_absmax = fc_act_ic_absmax[fc_name]
+print("=== absmax of activations observed ===")
+for fc_name in fc_observations:
+    the_min = fc_observations[fc_name]["min"]
+    the_max = fc_observations[fc_name]["max"]
 
-    mean_absmax = np.mean(the_absmax)
-    if mean_absmax < 0.5:
-        mean_absmax = 0.5
+    the_absmax = np.maximum(np.abs(the_min), np.abs(the_max))
+    fc_observations[fc_name]["absmax"] = the_absmax
+
+    mean_absmax = max(0.5, np.mean(the_absmax))
     outlier_idx = (the_absmax > 20 * mean_absmax)
-
     if (outlier_idx.sum() > 0):
         print(fc_name, mean_absmax, the_absmax[outlier_idx])
 
@@ -224,7 +243,7 @@ ov_model = OVModelForCausalLM.from_pretrained(
 )
 ref_answer = test_one_shot(ov_model)
 
-to_smooth_quant_model(ov_model.model, fc_act_ic_absmax, alpha = args.alpha, skip_act_quant_names=args.skip)
+to_smooth_quant_model(ov_model.model, fc_observations, alpha = args.alpha, skip_act_quant_names=args.skip, outlier_thr=args.outlier_thr)
 
 print("recompile...")
 ov_model.request = None
@@ -234,6 +253,9 @@ cur_answer = test_one_shot(ov_model)
 
 print(f"========ref_answer: {ref_answer}")
 print(f"========cur_answer: {cur_answer}")
+
+if args.ppl:
+    perplexity_ov(tok, ov_model, args.ppl, chunk_size = 512, step_size = 8192)
 
 if args.output_model_path is not None:
     print(f"saving to {args.output_model_path} ...")
