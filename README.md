@@ -31,7 +31,36 @@ python ./ov_smoothquant/quant.py -m ~/tingqian/models/Llama-2-7b-hf-ov/ -s ./act
 
 ## gpt-j-6b
 
+## openai-community/gpt2-medium
 
+export text generation model:
+```bash
+$ python3 ./tools/gpt2-textgen.py -e openai-community/gpt2-medium ./models/gpt2-medium-ov
+model openai-community/gpt2-medium is exported to ./models/gpt2-medium-ov
+```
+
+raw accuracy
+```bash
+$ python ./ov_smoothquant/ppl.py -m=./models/gpt2-medium-ov/ -c 128
+PPL: 28.72 @ chunk 128/128: 100%|█████████████| 2237/2237 [01:12<00:00, 30.97it/s]
+```
+
+calibration
+```bash
+python ./ov_smoothquant/calibration.py -m=./models/gpt2-medium-ov/ act_scales/gpt2.pickle
+saving fc_observations to act_scales/gpt2.pickle...
+```
+
+quantize
+```bash
+python ./ov_smoothquant/quant.py -m=./models/gpt2-medium-ov/ -s ./act_scales/gpt2.pickle -o ./models/gpt2-med-SQ -a 0.6 -othr 100 -ppl ./wikitext-2-raw/wiki.test.raw
+```
+
+new accuracy
+```bash
+python ./ov_smoothquant/ppl.py -m=./models/gpt2-med-SQ -c 128
+
+```
 
 ## Command lines
 

@@ -53,3 +53,49 @@ def perplexity_ov(tokenizer, ov_model, test_txt_file_path, chunk_size, step_size
         ppl_evaluator(result.logits.numpy()[0, seq_len//2:, :], input_ids_chunks.numpy()[0, seq_len//2:])
 
         progress_bar.set_description(f"{ppl_evaluator} @ chunk {chunk_size}/{step_size}")
+
+if __name__ == "__main__":
+    import argparse
+    from transformers import AutoModelForCausalLM, AutoConfig, AutoTokenizer
+    from optimum.intel.openvino import OVModelForCausalLM
+
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--bf16', action="store_true")
+    parser.add_argument('--f32', action="store_true")
+    parser.add_argument('-d', '--dynamic_quantization_group_size', type=int, default = 0)
+    parser.add_argument('-v', '--verbose', action="store_true")
+    parser.add_argument("-ppl", type=str, default="./wikitext-2-raw/wiki.test.raw")
+    parser.add_argument("-c", "--ppl-chunk", type=int, default=512)
+    parser.add_argument("-m", '--model_path', type=str, required=True)
+
+    args = parser.parse_args()
+
+    model_path = args.model_path
+    device = "CPU"
+    ov_config = {"PERFORMANCE_HINT": "LATENCY", "NUM_STREAMS": "1", "CACHE_DIR": "", "AFFINITY":"CORE"}
+    if args.bf16:
+        ov_config["INFERENCE_PRECISION_HINT"] = "bf16"
+
+    if args.f32:
+        ov_config["INFERENCE_PRECISION_HINT"] = "f32"
+
+    if args.dynamic_quantization_group_size > 0:
+        ov_config["DYNAMIC_QUANTIZATION_GROUP_SIZE"] = str(args.dynamic_quantization_group_size)
+
+    print(ov_config)
+    tok = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    if tok.pad_token is None:
+        tok.add_special_tokens({'pad_token': '[PAD]'})
+        #tok.pad_token = tok.eos_token_id
+    cfg=AutoConfig.from_pretrained(model_path, trust_remote_code=True)
+    ov_model = OVModelForCausalLM.from_pretrained(
+        args.model_path,
+        device=device,
+        ov_config=ov_config,
+        config=cfg,
+        trust_remote_code=True,
+        use_cache=False
+    )
+
+    perplexity_ov(tok, ov_model, args.ppl, chunk_size = args.ppl_chunk)

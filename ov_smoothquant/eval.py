@@ -154,7 +154,7 @@ else:
         device=device,
         ov_config=ov_config,
         config=cfg,
-        trust_remote_code=True,
+        trust_remote_code=True
     )
     print(rank_info, f" Model compilation took {time.time()-t1:.2f} seconds.")
 

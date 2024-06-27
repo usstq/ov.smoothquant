@@ -32,7 +32,9 @@ def to_min_max_model(model):
                 return False
 
             #print(root, pvm[act].get_node())
-            axes =  [0, 1]
+            act_rank = len(pvm[act].get_partial_shape())
+            axes =  [i for i in range(act_rank-1)]
+
             the_min = opset.reduce_min(pvm[act], reduction_axes = axes)
             the_max = opset.reduce_max(pvm[act], reduction_axes = axes)
             
@@ -68,6 +70,7 @@ def get_fc_observations(model_path, dataset_path, seq_len = 512, num_samples = 5
         ov_config=ov_config,
         config=cfg,
         trust_remote_code=True,
+        use_cache=False
     )
 
     print("replace ov_model...")

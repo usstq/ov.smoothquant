@@ -43,7 +43,8 @@ def to_smooth_quant_model(model, fc_observations, skip_act_quant_names=[], act_q
 
             weight = const_weight.data.astype(np.float32)
 
-            IC = pvm[act].get_partial_shape().get_dimension(2).get_length()
+            act_rank = len(pvm[act].get_partial_shape())
+            IC = pvm[act].get_partial_shape().get_dimension(act_rank-1).get_length()
             assert(IC == weight.shape[1])
 
             OC = weight.shape[0]
@@ -67,6 +68,7 @@ def to_smooth_quant_model(model, fc_observations, skip_act_quant_names=[], act_q
                     if skip_name in root.get_friendly_name():
                         quant_activation = False
 
+            '''
             if ".mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
                 layer_id = int(root.get_friendly_name().split(".")[3])
                 # layer_id == 25 : PPL: 5.65
@@ -78,7 +80,7 @@ def to_smooth_quant_model(model, fc_observations, skip_act_quant_names=[], act_q
                     per_channel_alpha = 0.87
                     quant_activation = True
 
-            '''
+
             if "__module.model.layers.1.mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
                 quant_activation = False
             #if "__module.model.layers.30.mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
@@ -227,6 +229,7 @@ ov_model = OVModelForCausalLM.from_pretrained(
     ov_config=ov_config,
     config=cfg,
     trust_remote_code=True,
+    use_cache=False
 )
 
 def test_one_shot(ov_model, new_tokens = 32):
@@ -248,6 +251,7 @@ ov_model = OVModelForCausalLM.from_pretrained(
     ov_config=ov_config,
     config=cfg,
     trust_remote_code=True,
+    use_cache=False
 )
 ref_answer = test_one_shot(ov_model)
 
