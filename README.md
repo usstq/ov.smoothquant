@@ -26,12 +26,13 @@ $ lm_eval --model openvino --tasks lambada_openai --model_args pretrained=./mode
 |lambada_openai|      1|none  |     0|acc       |↑  | 0.4306|±  |0.0069|
 $ python ./ov_smoothquant/calibration.py -m models/gpt2-medium-ov act_scales/gpt2-medium.pickle
 $ python ./ov_smoothquant/quant.py -m models/gpt2-medium-ov -s act_scales/gpt2-medium.pickle -o ./models/gpt2-medium-SQ
+# `-skip_act _`  weight-only quantization cannot preserve accuracy, thus
+# the weight is already difficult to quantize
+|lambada_openai|      1|none  |     0|acc       |↑  | 0.3992|±  |0.0068|
 # -a 0.6 -skip_act lm_head
 |lambada_openai|      1|none  |     0|acc       |↑  | 0.3862|±  |0.0068|
 # -a 0.8 -skip_act lm_head
 |lambada_openai|      1|none  |     0|acc       |↑  | 0.4000|±  |0.0068|
-# -a 0.8 -skip_act lm_ head .3.mlp.c_proj
-|lambada_openai|      1|none  |     0|acc       |↑  | 0.4002|±  |0.0068|
 ```
 
 ## bloomz-560m
