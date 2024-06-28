@@ -6,18 +6,33 @@ But it's not easy to keep accuracy of the quantized model, Intel® Neural Compre
 
 OpenVINO backend for HF pipeline is [optimum-intel](https://github.com/huggingface/optimum-intel/), and the model exported by `optimum-cli` only support weight-only quantization of int8(or int4).
 
-according to `https://github.com/intel/neural-compressor/blob/master/docs/source/smooth_quant.md#validated-models`:
+according to [neural-compressor](https://github.com/intel/neural-compressor/blob/master/docs/source/smooth_quant.md#validated-models):
 
 | Model/Last token accuracy |  FP32 Accuracy   | INT8 (w/ SmoothQuant) | Notes | ours |
-|:----------:|:------:|:------:|-----------------------------------| ------:|
+|:----------:|:------:|:------:|-----------------------------------|:------:|
 | bigscience/bloomz-560m  | 0.3947 | 0.3930 | alpha=0.8, Ipex 2.1  | 0.3914 `-a 0.8 -skip lm_head` |
 | facebook/opt-2.7b       | 0.6365 | 0.6404 | alpha=0.5, Ipex 2.0  | 0.6390 `-a 0.5 -skip lm_head` |
-| databricks/dolly-v1-6b* | 0.6866 | 0.6895 | alpha=0.8, Ipex 2.1  | 0.6788(alpha=0.8) 0.6975(alpha=0.85) `-skip lm_head` |
+| databricks/dolly-v1-6b* | 0.6866 | 0.6895 | alpha=0.8, Ipex 2.1  | 0.6975 `-a 0.85 -skip lm_head` |
 | LLaMa-2-7b-hf*          | 0.7392 | 0.7335 | alpha=Auto, Ipex 2.1 | 0.7394 `-a 0.85 -skip_act to/Convert mlp.down_proj` |
-
+| gpt2-medium             | 0.4306 |        |                      | 0.4002 `-a 0.8 -skip_act lm_ head .3.mlp.c_proj` |
 validattion tools:
  - https://github.com/EleutherAI/lm-evaluation-harness
  - commit e5e5ee0cb629c9c88165292d1b4bf34623392d33
+
+## openai-community/gpt2-medium
+```bash
+$ optimum-cli export openvino --fp16 --task text-generation-with-past -m  openai-community/gpt2-medium ./models/gpt2-medium-ov
+$ lm_eval --model openvino --tasks lambada_openai --model_args pretrained=./models/gpt2-medium-ov,ov_config=ov_config.json
+|lambada_openai|      1|none  |     0|acc       |↑  | 0.4306|±  |0.0069|
+$ python ./ov_smoothquant/calibration.py -m models/gpt2-medium-ov act_scales/gpt2-medium.pickle
+$ python ./ov_smoothquant/quant.py -m models/gpt2-medium-ov -s act_scales/gpt2-medium.pickle -o ./models/gpt2-medium-SQ
+# -a 0.6 -skip_act lm_head
+|lambada_openai|      1|none  |     0|acc       |↑  | 0.3862|±  |0.0068|
+# -a 0.8 -skip_act lm_head
+|lambada_openai|      1|none  |     0|acc       |↑  | 0.4000|±  |0.0068|
+# -a 0.8 -skip_act lm_ head .3.mlp.c_proj
+|lambada_openai|      1|none  |     0|acc       |↑  | 0.4002|±  |0.0068|
+```
 
 ## bloomz-560m
 ```bash
@@ -37,7 +52,6 @@ $ lm_eval --model openvino --tasks lambada_openai --model_args pretrained=./mode
 |lambada_openai|      1|none  |     0|acc       |↑  |0.6367|±  |0.0067|
 $ python ./ov_smoothquant/calibration.py -m=./models/opt-2.7b-ov/ act_scales/opt-2.7b.pickle
 $ python ./ov_smoothquant/quant.py -m=./models/opt-2.7b-ov/ -s act_scales/opt-2.7b.pickle -o ./models/opt-2.7b-SQ -a 0.5 -skip lm_head
-$ lm_eval --model openvino --tasks lambada_openai --model_args pretrained=./models/opt-2.7b-SQ/,ov_config=ov_config.json
 |lambada_openai|      1|none  |     0|acc       |↑  |0.6390|±  |0.0067|
 ```
 
@@ -48,10 +62,8 @@ $ lm_eval --model openvino --tasks lambada_openai --model_args pretrained=./mode
 |lambada_openai|      1|none  |     0|acc       |↑  |0.6866|±  |0.0065|
 $ python ./ov_smoothquant/calibration.py -m=./models/dolly-v1-6b-ov/ act_scales/dolly-v1-6b.pickle
 $ python ./ov_smoothquant/quant.py -m=./models/dolly-v1-6b-ov/ -s act_scales/dolly-v1-6b.pickle  -o ./models/dolly-v1-6b-SQ -a 0.8 -skip lm_head
-$ lm_eval --model openvino --tasks lambada_openai --model_args pretrained=./models/dolly-v1-6b-SQ,ov_config=ov_config.json
 |lambada_openai|      1|none  |     0|acc       |↑  |0.6788|±  |0.0065| 
 $ python ./ov_smoothquant/quant.py -m=./models/dolly-v1-6b-ov/ -s act_scales/dolly-v1-6b.pickle  -o ./models/dolly-v1-6b-SQ -a 0.85 -skip lm_head
-$ lm_eval --model openvino --tasks lambada_openai --model_args pretrained=./models/dolly-v1-6b-SQ,ov_config=ov_config.json
 |lambada_openai|      1|none  |     0|acc       |↑  |0.6975|±  |0.0064|
 ```
 
@@ -89,31 +101,18 @@ To keep accuracy better, we need:
 
 ## openai-community/gpt2-medium
 
-export text generation model:
 ```bash
+# export text generation model
 $ python3 ./tools/gpt2-textgen.py -e openai-community/gpt2-medium ./models/gpt2-medium-ov
 model openai-community/gpt2-medium is exported to ./models/gpt2-medium-ov
-```
-
-raw accuracy
-```bash
+# raw accuracy
 $ python ./ov_smoothquant/ppl.py -m=./models/gpt2-medium-ov/ -c 128
 PPL: 28.72 @ chunk 128/128: 100%|█████████████| 2237/2237 [01:12<00:00, 30.97it/s]
-```
-
-calibration
-```bash
+# calibration
 python ./ov_smoothquant/calibration.py -m=./models/gpt2-medium-ov/ act_scales/gpt2.pickle
-saving fc_observations to act_scales/gpt2.pickle...
-```
-
-quantize
-```bash
+# quantize
 python ./ov_smoothquant/quant.py -m=./models/gpt2-medium-ov/ -s ./act_scales/gpt2.pickle -o ./models/gpt2-med-SQ -a 0.6 -othr 100 -ppl ./wikitext-2-raw/wiki.test.raw
-```
-
-new accuracy
-```bash
+#new accuracy
 python ./ov_smoothquant/ppl.py -m=./models/gpt2-med-SQ -c 128
 PPL: 29.20
 ```
@@ -145,64 +144,4 @@ PPL: 13.02 @ ppl-chunk 128:
 
 python ov_smoothquant/eval.py ./models/gpt-j-6b-SQ/ -ppl wikitext-2-raw/wiki.test.raw -c 128
 PPL: 13.64 @ ppl-chunk 128  0.85
-
-```
-
-
-/home/spr_models/gpt-j-6b/pytorch/INT8_compressed_weights
-2024-06-26 07:39:35,788 - root - INFO - |     Task     |Version|Metric|Value |   |Stderr|
-2024-06-26 07:39:35,788 - root - INFO - |--------------|------:|------|-----:|---|-----:|
-2024-06-26 07:39:35,788 - root - INFO - |lambada_openai|      0|ppl   |4.1192|±  |0.0889|
-2024-06-26 07:39:35,788 - root - INFO - |              |       |acc   |0.6765|±  |0.0065|
-
-/models/gpt-j-6b-SQ/
-2024-06-26 08:06:30,120 - root - INFO - |     Task     |Version|Metric|Value |   |Stderr|
-2024-06-26 08:06:30,120 - root - INFO - |--------------|------:|------|-----:|---|-----:|
-2024-06-26 08:06:30,120 - root - INFO - |lambada_openai|      0|ppl   |4.0520|±  |0.0887|
-2024-06-26 08:06:30,120 - root - INFO - |              |       |acc   |0.6852|±  |0.0065|
-
-
-
-lm_eval --model hf \
-    --model_args pretrained=bigscience/bloomz-560m,dtype="float" \
-    --tasks lambada_openai \
-    --device cpu
-
-
-```bash
-# https://github.com/EleutherAI/lm-evaluation-harness : e5e5ee0cb629c9c88165292d1b4bf34623392d33
-$ lm_eval --model hf     --model_args pretrained=bigscience/bloomz-560m,dtype="float"     --tasks lambada_openai     --device cpu
-|    Tasks     |Version|Filter|n-shot|  Metric  |   | Value |   |Stderr|
-|--------------|------:|------|-----:|----------|---|------:|---|-----:|
-|lambada_openai|      1|none  |     0|acc       |↑  | 0.3947|±  |0.0068|
-|              |       |none  |     0|perplexity|↓  |22.8932|±  |0.9141|
-
-
-$ lm_eval --model openvino --model_args pretrained=/home/sdp/tingqian/ov.smoothquant/models/bloomz-560m-ov --tasks lambada_openai --device cpu
-openvino (pretrained=/home/sdp/tingqian/ov.smoothquant/models/bloomz-560m-ov), gen_kwargs: (None), limit: None, num_fewshot: None, batch_size: 1
-|    Tasks     |Version|Filter|n-shot|  Metric  |   | Value |   |Stderr|
-|--------------|------:|------|-----:|----------|---|------:|---|-----:|
-|lambada_openai|      1|none  |     0|acc       |↑  | 0.3177|±  |0.0065|
-|              |       |none  |     0|perplexity|↓  |25.8720|±  |1.0615|
-
-
-# ov_config.json
-# {"INFERENCE_PRECISION_HINT": "f32", "CACHE_DIR": ""}
-$ lm_eval --model openvino --model_args pretrained=/home/sdp/tingqian/ov.smoothquant/models/bloomz-560m-ov,ov_config=ov_config.json --tasks lambada_openai --device cpu
-|    Tasks     |Version|Filter|n-shot|  Metric  |   | Value |   |Stderr|
-|--------------|------:|------|-----:|----------|---|------:|---|-----:|
-|lambada_openai|      1|none  |     0|acc       |↑  | 0.3947|±  |0.0068|
-|              |       |none  |     0|perplexity|↓  |22.8933|±  |0.9141|
-
-
-$ lm_eval --model openvino --model_args pretrained=/home/sdp/tingqian/ov.smoothquant/models/bloomz-560m-SQ,ov_config=ov_config.json --tasks lambada_openai --device cpu
-|    Tasks     |Version|Filter|n-shot|  Metric  |   | Value |   |Stderr|
-|--------------|------:|------|-----:|----------|---|------:|---|-----:|
-|lambada_openai|      1|none  |     0|acc       |↑  | 0.3786|±  |0.0068|
-|              |       |none  |     0|perplexity|↓  |26.2136|±  |1.0694|
-
-|    Tasks     |Version|Filter|n-shot|  Metric  |   | Value |   |Stderr|
-|--------------|------:|------|-----:|----------|---|------:|---|-----:|
-|lambada_openai|      1|none  |     0|acc       |↑  | 0.3914|±  |0.0068|
-|              |       |none  |     0|perplexity|↓  |23.3459|±  |0.9305|
 ```
