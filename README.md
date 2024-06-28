@@ -6,51 +6,84 @@ But it's not easy to keep accuracy of the quantized model, Intel® Neural Compre
 
 OpenVINO backend for HF pipeline is [optimum-intel](https://github.com/huggingface/optimum-intel/), and the model exported by `optimum-cli` only support weight-only quantization of int8(or int4).
 
+according to `https://github.com/intel/neural-compressor/blob/master/docs/source/smooth_quant.md#validated-models`:
 
-## 
+| Model/Last token accuracy |  FP32 Accuracy   | INT8 (w/ SmoothQuant) | Notes | ours |
+|:----------:|:------:|:------:|-----------------------------------| ------:|
+| bigscience/bloomz-560m  | 0.3947 | 0.3930 | alpha=0.8, Ipex 2.1  | 0.3914 `-a 0.8 -skip lm_head` |
+| facebook/opt-2.7b       | 0.6365 | 0.6404 | alpha=0.5, Ipex 2.0  | 0.6390 `-a 0.5 -skip lm_head` |
+| databricks/dolly-v1-6b* | 0.6866 | 0.6895 | alpha=0.8, Ipex 2.1  | 0.6788(alpha=0.8) 0.6975(alpha=0.85) `-skip lm_head` |
+| LLaMa-2-7b-hf*          | 0.7392 | 0.7335 | alpha=Auto, Ipex 2.1 | 0.7394 `-a 0.85 -skip_act to/Convert mlp.down_proj` |
 
+validattion tools:
+ - https://github.com/EleutherAI/lm-evaluation-harness
+ - commit e5e5ee0cb629c9c88165292d1b4bf34623392d33
+
+## bloomz-560m
 ```bash
-# convert
-optimum-cli export openvino --fp16 --task text-generation-with-past -m ./bigscience/bloomz-560m/ bloomz-560m-ov
-# orginal PPL
-python ./ov_smoothquant/ppl.py -m /home/tingqian/tingqian/models/bloomz-560m-ov --f32
-PPL: 29.58 @ chunk 512/512: 100%|██████████████████| 557/557 [05:03<00:00,  1.83it/s]
-python ./ov_smoothquant/ppl.py -m /home/tingqian/tingqian/models/bloomz-560m-ov --f32 -x16
-PPL: 28.37 @ chunk 512/8192: 100%|█████████████████| 35/35 [00:19<00:00,  1.80it/s]
-
-# calibration
-python ./ov_smoothquant/calibration.py -m /home/tingqian/tingqian/models/bloomz-560m-ov act_scales/bloomz-560m.pickle
-
-# quantize
-python ./ov_smoothquant/quant.py -m /home/tingqian/tingqian/models/bloomz-560m-ov -s act_scales/bloomz-560m.pickle -o ./models/bloomz-560m-SQ -a 0.8 -othr 100000 -ppl ./wikitext-2-raw/wiki.test.raw
-
-# validate
-python ./ov_smoothquant/ppl.py -m=./models/ --f32 -x16
-PPL: 30.82 @ chunk 512/8192: 100%|█████████████████| 35/35 [00:14<00:00,  2.43it/s]
-python ./ov_smoothquant/ppl.py -m /home/tingqian/tingqian/models/bloomz-560m-ov --f32
-PPL: 32.21 @ chunk 512/512: 100%|██████████████████| 557/557 [03:45<00:00,  2.47it/s]
-
+$ optimum-cli export openvino --fp16 --task text-generation-with-past -m bigscience/bloomz-560m/ bloomz-560m-ov
+$ python ./ov_smoothquant/calibration.py -m /home/tingqian/tingqian/models/bloomz-560m-ov act_scales/bloomz-560m.pickle
+$ python ./ov_smoothquant/quant.py -m ./models/bloomz-560m-ov -s act_scales/bloomz-560m.pickle -o ./models/bloomz-560m-SQ -a 0.8 -skip lm_head
+$ lm_eval --model openvino --model_args pretrained=./models/bloomz-560m-SQ --tasks lambada_openai
+|lambada_openai|      1|none  |     0|acc       |↑  | 0.3128|±  |0.0065|
+$ lm_eval --model openvino --model_args pretrained=./models/bloomz-560m-SQ,ov_config=ov_config.json --tasks lambada_openai
+|lambada_openai|      1|none  |     0|acc       |↑  | 0.3914|±  |0.0068|
 ```
+
+## facebook/opt-2.7b
+```bash
+$ optimum-cli export openvino --fp16 --task text-generation-with-past -m facebook/opt-2.7b ./models/opt-2.7b-ov
+$ lm_eval --model openvino --tasks lambada_openai --model_args pretrained=./models/opt-2.7b-ov/,ov_config=ov_config.json
+|lambada_openai|      1|none  |     0|acc       |↑  |0.6367|±  |0.0067|
+$ python ./ov_smoothquant/calibration.py -m=./models/opt-2.7b-ov/ act_scales/opt-2.7b.pickle
+$ python ./ov_smoothquant/quant.py -m=./models/opt-2.7b-ov/ -s act_scales/opt-2.7b.pickle -o ./models/opt-2.7b-SQ -a 0.5 -skip lm_head
+$ lm_eval --model openvino --tasks lambada_openai --model_args pretrained=./models/opt-2.7b-SQ/,ov_config=ov_config.json
+|lambada_openai|      1|none  |     0|acc       |↑  |0.6390|±  |0.0067|
+```
+
+## databricks/dolly-v1-6b
+```bash
+$ optimum-cli export openvino --fp16 --task text-generation-with-past -m databricks/dolly-v1-6b ./models/dolly-v1-6b-ov
+$ lm_eval --model openvino --tasks lambada_openai --model_args pretrained=./models/dolly-v1-6b-ov,ov_config=ov_config.json
+|lambada_openai|      1|none  |     0|acc       |↑  |0.6866|±  |0.0065|
+$ python ./ov_smoothquant/calibration.py -m=./models/dolly-v1-6b-ov/ act_scales/dolly-v1-6b.pickle
+$ python ./ov_smoothquant/quant.py -m=./models/dolly-v1-6b-ov/ -s act_scales/dolly-v1-6b.pickle  -o ./models/dolly-v1-6b-SQ -a 0.8 -skip lm_head
+$ lm_eval --model openvino --tasks lambada_openai --model_args pretrained=./models/dolly-v1-6b-SQ,ov_config=ov_config.json
+|lambada_openai|      1|none  |     0|acc       |↑  |0.6788|±  |0.0065| 
+$ python ./ov_smoothquant/quant.py -m=./models/dolly-v1-6b-ov/ -s act_scales/dolly-v1-6b.pickle  -o ./models/dolly-v1-6b-SQ -a 0.85 -skip lm_head
+$ lm_eval --model openvino --tasks lambada_openai --model_args pretrained=./models/dolly-v1-6b-SQ,ov_config=ov_config.json
+|lambada_openai|      1|none  |     0|acc       |↑  |0.6975|±  |0.0064|
+```
+
+## meta-llama/Llama-2-7b-hf
+```bash
+$ HF_TOKEN=xxx optimum-cli export openvino --fp16 --task text-generation-with-past -m meta-llama/Llama-2-7b-hf ./models/Llama-2-7b-hf-ov
+$ lm_eval --model openvino --tasks lambada_openai --model_args pretrained=./models/Llama-2-7b-hf-ov,ov_config=ov_config.json
+|lambada_openai|      1|none  |     0|acc       |↑  |0.7392|±  |0.0061|
+python ./ov_smoothquant/ppl.py --f32 -x16 -m ./models/Llama-2-7b-hf-ov
+PPL: 5.63 @ chunk 512/8192: 100%|████████████████| 41/41 [02:18<00:00,  3.38s/it]
+$ python ./ov_smoothquant/calibration.py -m=./models/Llama-2-7b-hf-ov act_scales/Llama-2-7b-hf.pickle
+$ python ./ov_smoothquant/quant.py -m=./models/Llama-2-7b-hf-ov -s act_scales/Llama-2-7b-hf.pickle  -o ./models/Llama-2-7b-hf-SQ -a 0.85 -skip to/Convert
+$ python ./ov_smoothquant/ppl.py --f32 -x16 -m ./models/Llama-2-7b-hf-SQ
+PPL: 6.04 @ chunk 512/8192: 100%|████████████████| 41/41 [00:32<00:00,  1.27it/s]
+
+# mlp.down_proj is difficult to quantize (official smoothquant didn't apply smooth-quant to them at all before quantization, I don't know why),
+# eliminate them from quantization list can boost accuracy, another tricky thing is per-token dynamic quantization of activations of down_proj
+# seems to be also very helpful to preserve accuracy, but requires special kernels
+# but mlp.down_proj & lm_head can still use weight-only compression
+$ python ./ov_smoothquant/quant.py -m=./models/Llama-2-7b-hf-ov -s act_scales/Llama-2-7b-hf.pickle  -o ./models/Llama-2-7b-hf-SQ -a 0.85 -skip_act to/Convert mlp.down_proj
+PPL: 5.65 @ chunk 512/8192: 100%|████████████████| 41/41 [00:51<00:00,  1.25s/it]
+|lambada_openai|      1|none  |     0|acc       |↑  |0.7394|±  |0.0061|
+```
+
 ## Llama-2-7b
 To keep accuracy better, we need:
+ - lm_head
  - weight must be per-OC INT8-quantized (symmetrically)
  - Using relatively high alpha `alpha=0.85`
  - must use per-token quantization for activation (at least for mlp.down_proj)
-   or skip some mlp.down_proj layers:
-```bash
-# __module.model.layers.1.mlp.down_proj/aten::linear/MatMul
-# __module.model.layers.8.mlp.down_proj/aten::linear/MatMul
-# __module.model.layers.10.self_attn.q_proj/aten::linear/MatMul & k & v
-# __module.model.layers.26.mlp.down_proj/aten::linear/MatMul
-# __module.model.layers.27.mlp.down_proj/aten::linear/MatMul
-# __module.model.layers.28.mlp.down_proj/aten::linear/MatMul
-# __module.model.layers.29.mlp.down_proj/aten::linear/MatMul
-# __module.model.layers.30.mlp.down_proj/aten::linear/MatMul
-# __module.model.layers.31.mlp.down_proj/aten::linear/MatMul
-python ./ov_smoothquant/quant.py -m ~/tingqian/models/Llama-2-7b-hf-ov/ -s ./act_scales/Llama-2-7b-hf.pickle -o ./models/Llama-2-7b-hf-SQ -a 0.9 -skip .8.mlp.down_proj .31.mlp.down_proj .30.mlp.down_proj .1.mlp.down_proj .29.mlp.down_proj
-
-```
- - very few channel has very large absmax (>100), and must be calculated separately using FP16/FP32/BF16 like [LLM.int8()](https://arxiv.org/abs/2208.07339)
+   or skip quantizing activations of mlp.down_proj layers:
+ - mlp.down_proj has very large absmax (>100), and must be calculated separately using FP16/FP32/BF16 like [LLM.int8()](https://arxiv.org/abs/2208.07339)
 
 ## gpt-j-6b
 
@@ -127,3 +160,49 @@ PPL: 13.64 @ ppl-chunk 128  0.85
 2024-06-26 08:06:30,120 - root - INFO - |--------------|------:|------|-----:|---|-----:|
 2024-06-26 08:06:30,120 - root - INFO - |lambada_openai|      0|ppl   |4.0520|±  |0.0887|
 2024-06-26 08:06:30,120 - root - INFO - |              |       |acc   |0.6852|±  |0.0065|
+
+
+
+lm_eval --model hf \
+    --model_args pretrained=bigscience/bloomz-560m,dtype="float" \
+    --tasks lambada_openai \
+    --device cpu
+
+
+```bash
+# https://github.com/EleutherAI/lm-evaluation-harness : e5e5ee0cb629c9c88165292d1b4bf34623392d33
+$ lm_eval --model hf     --model_args pretrained=bigscience/bloomz-560m,dtype="float"     --tasks lambada_openai     --device cpu
+|    Tasks     |Version|Filter|n-shot|  Metric  |   | Value |   |Stderr|
+|--------------|------:|------|-----:|----------|---|------:|---|-----:|
+|lambada_openai|      1|none  |     0|acc       |↑  | 0.3947|±  |0.0068|
+|              |       |none  |     0|perplexity|↓  |22.8932|±  |0.9141|
+
+
+$ lm_eval --model openvino --model_args pretrained=/home/sdp/tingqian/ov.smoothquant/models/bloomz-560m-ov --tasks lambada_openai --device cpu
+openvino (pretrained=/home/sdp/tingqian/ov.smoothquant/models/bloomz-560m-ov), gen_kwargs: (None), limit: None, num_fewshot: None, batch_size: 1
+|    Tasks     |Version|Filter|n-shot|  Metric  |   | Value |   |Stderr|
+|--------------|------:|------|-----:|----------|---|------:|---|-----:|
+|lambada_openai|      1|none  |     0|acc       |↑  | 0.3177|±  |0.0065|
+|              |       |none  |     0|perplexity|↓  |25.8720|±  |1.0615|
+
+
+# ov_config.json
+# {"INFERENCE_PRECISION_HINT": "f32", "CACHE_DIR": ""}
+$ lm_eval --model openvino --model_args pretrained=/home/sdp/tingqian/ov.smoothquant/models/bloomz-560m-ov,ov_config=ov_config.json --tasks lambada_openai --device cpu
+|    Tasks     |Version|Filter|n-shot|  Metric  |   | Value |   |Stderr|
+|--------------|------:|------|-----:|----------|---|------:|---|-----:|
+|lambada_openai|      1|none  |     0|acc       |↑  | 0.3947|±  |0.0068|
+|              |       |none  |     0|perplexity|↓  |22.8933|±  |0.9141|
+
+
+$ lm_eval --model openvino --model_args pretrained=/home/sdp/tingqian/ov.smoothquant/models/bloomz-560m-SQ,ov_config=ov_config.json --tasks lambada_openai --device cpu
+|    Tasks     |Version|Filter|n-shot|  Metric  |   | Value |   |Stderr|
+|--------------|------:|------|-----:|----------|---|------:|---|-----:|
+|lambada_openai|      1|none  |     0|acc       |↑  | 0.3786|±  |0.0068|
+|              |       |none  |     0|perplexity|↓  |26.2136|±  |1.0694|
+
+|    Tasks     |Version|Filter|n-shot|  Metric  |   | Value |   |Stderr|
+|--------------|------:|------|-----:|----------|---|------:|---|-----:|
+|lambada_openai|      1|none  |     0|acc       |↑  | 0.3914|±  |0.0068|
+|              |       |none  |     0|perplexity|↓  |23.3459|±  |0.9305|
+```

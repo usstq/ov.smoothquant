@@ -11,7 +11,7 @@ import tqdm
 import pickle, sys, time, argparse
 from ppl import perplexity_ov
 
-def to_smooth_quant_model(model, fc_observations, skip_act_quant_names=[], act_quant_sym = False, outlier_thr = 1e9, alpha = 0.8):
+def to_smooth_quant_model(model, fc_observations, skip_act_quant_names=[], skip_quant_names=[], act_quant_sym = False, outlier_thr = 1e9, alpha = 0.8):
     # Simple: for Extensions. Without any classes and inheritance.
     def pattern_replacement():
         act = AnyInput()
@@ -51,7 +51,8 @@ def to_smooth_quant_model(model, fc_observations, skip_act_quant_names=[], act_q
 
             # smooth-quant:
             weight_abs_max = abs(weight).max(0).clip(min=1e-5)
-            assert(X_absmax.min() > 0)
+            X_absmax = X_absmax.clip(min=1e-5)
+            # assert(X_absmax.min() > 0)
 
             # s : each IC channel of weight matrix * s
             # use big alpha, for bigger outlier |X|, so x_scale can scale it down further
@@ -62,11 +63,16 @@ def to_smooth_quant_model(model, fc_observations, skip_act_quant_names=[], act_q
 
             layer_id = 0 # int(root.get_friendly_name().split(".")[3])
             quant_activation = True
-
             if skip_act_quant_names is not None:
                 for skip_name in skip_act_quant_names:
                     if skip_name in root.get_friendly_name():
                         quant_activation = False
+
+            if skip_quant_names is not None:
+                for skip_name in skip_quant_names:
+                    if skip_name in root.get_friendly_name():
+                        print(f"\t skipped {root.get_friendly_name()}")
+                        return False
 
             '''
             if ".mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
@@ -173,7 +179,9 @@ def to_smooth_quant_model(model, fc_observations, skip_act_quant_names=[], act_q
             replace_node(root, new_matmul)
 
             X_maxabs_thr = max(10*X_absmax.mean(), 30)
-            print(f"{'Q' if quant_activation else ' '} Outlier:{outlier_cnt} {layer_id} {root.get_friendly_name()} [x:{smoothquant_x_scales.min():.2f}~{smoothquant_x_scales.max():.2f} w:{smoothquant_w_scales.min():.2f}~{smoothquant_w_scales.max():.2f}]  {X_min.min():.2f}~{X_max.max():.2f} =>  {x_min_per_tensor:.2f}~{x_max_per_tensor:.2f} mean:{X_absmax.mean():.3f}  big:{X_absmax[X_absmax > X_maxabs_thr]}")
+            quant_flag = f"Q{'A' if quant_activation else '_'}W"
+
+            print(f"{quant_flag} Outlier:{outlier_cnt} {layer_id} {root.get_friendly_name()} [x:{smoothquant_x_scales.min():.2f}~{smoothquant_x_scales.max():.2f} w:{smoothquant_w_scales.min():.2f}~{smoothquant_w_scales.max():.2f}]  {X_min.min():.2f}~{X_max.max():.2f} =>  {x_min_per_tensor:.2f}~{x_max_per_tensor:.2f} mean:{X_absmax.mean():.3f}  big:{X_absmax[X_absmax > X_maxabs_thr]}")
             return True
         return Matcher(matmul, "SimpleReplacement"), callback
     manager = Manager()
@@ -189,6 +197,8 @@ parser.add_argument("-s", "--act_scales_path", type=str, required=True, help="ta
 parser.add_argument("-p", "--prompt", type=str, default="What's oxygen?")
 
 parser.add_argument("-skip", "--skip", type=str, nargs='*')
+parser.add_argument("-skip_act", "--skip_act", type=str, nargs='*')
+
 parser.add_argument("-othr", "--outlier_thr", type=float, default=1e9)
 parser.add_argument("-o", "--output_model_path", type=str, help="target model path", default=None)
 parser.add_argument("-uc", '--use_cache', type=int, default=1)
@@ -254,7 +264,11 @@ def test_one_shot(ov_model, new_tokens = 32):
 
 ref_answer = test_one_shot(ov_model)
 
-to_smooth_quant_model(ov_model.model, fc_observations, alpha = args.alpha, skip_act_quant_names=args.skip, outlier_thr=args.outlier_thr)
+to_smooth_quant_model(ov_model.model, fc_observations,
+    alpha = args.alpha, 
+    skip_act_quant_names=args.skip_act,
+    skip_quant_names=args.skip,
+    outlier_thr=args.outlier_thr)
 
 print("recompile...")
 ov_model.request = None
