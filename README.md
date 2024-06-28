@@ -7,7 +7,30 @@ But it's not easy to keep accuracy of the quantized model, Intel® Neural Compre
 OpenVINO backend for HF pipeline is [optimum-intel](https://github.com/huggingface/optimum-intel/), and the model exported by `optimum-cli` only support weight-only quantization of int8(or int4).
 
 
+## 
 
+```bash
+# convert
+optimum-cli export openvino --fp16 --task text-generation-with-past -m ./bigscience/bloomz-560m/ bloomz-560m-ov
+# orginal PPL
+python ./ov_smoothquant/ppl.py -m /home/tingqian/tingqian/models/bloomz-560m-ov --f32
+PPL: 29.58 @ chunk 512/512: 100%|██████████████████| 557/557 [05:03<00:00,  1.83it/s]
+python ./ov_smoothquant/ppl.py -m /home/tingqian/tingqian/models/bloomz-560m-ov --f32 -x16
+PPL: 28.37 @ chunk 512/8192: 100%|█████████████████| 35/35 [00:19<00:00,  1.80it/s]
+
+# calibration
+python ./ov_smoothquant/calibration.py -m /home/tingqian/tingqian/models/bloomz-560m-ov act_scales/bloomz-560m.pickle
+
+# quantize
+python ./ov_smoothquant/quant.py -m /home/tingqian/tingqian/models/bloomz-560m-ov -s act_scales/bloomz-560m.pickle -o ./models/bloomz-560m-SQ -a 0.8 -othr 100000 -ppl ./wikitext-2-raw/wiki.test.raw
+
+# validate
+python ./ov_smoothquant/ppl.py -m=./models/ --f32 -x16
+PPL: 30.82 @ chunk 512/8192: 100%|█████████████████| 35/35 [00:14<00:00,  2.43it/s]
+python ./ov_smoothquant/ppl.py -m /home/tingqian/tingqian/models/bloomz-560m-ov --f32
+PPL: 32.21 @ chunk 512/512: 100%|██████████████████| 557/557 [03:45<00:00,  2.47it/s]
+
+```
 ## Llama-2-7b
 To keep accuracy better, we need:
  - weight must be per-OC INT8-quantized (symmetrically)
@@ -59,7 +82,7 @@ python ./ov_smoothquant/quant.py -m=./models/gpt2-medium-ov/ -s ./act_scales/gpt
 new accuracy
 ```bash
 python ./ov_smoothquant/ppl.py -m=./models/gpt2-med-SQ -c 128
-
+PPL: 29.20
 ```
 
 ## Command lines

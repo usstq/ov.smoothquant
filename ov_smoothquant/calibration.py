@@ -55,7 +55,7 @@ def to_min_max_model(model):
     model.add_results(new_results)
     return fc_names
 
-def get_fc_observations(model_path, dataset_path, seq_len = 512, num_samples = 512, device="CPU"):
+def get_fc_observations(model_path, dataset_path, seq_len = 512, num_samples = 512, device="CPU", use_cache = True):
     cfg=AutoConfig.from_pretrained(model_path, trust_remote_code=True)
     tok = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
     if tok.pad_token is None:
@@ -70,7 +70,7 @@ def get_fc_observations(model_path, dataset_path, seq_len = 512, num_samples = 5
         ov_config=ov_config,
         config=cfg,
         trust_remote_code=True,
-        use_cache=False
+        use_cache=use_cache
     )
 
     print("replace ov_model...")
@@ -106,6 +106,7 @@ import tqdm
 parser = argparse.ArgumentParser()
 parser.add_argument("-d", "--dataset-path", type=str, default="./pile-rnd512.val.jsonl.zst", help="location of the calibration dataset, we use the validation set of the Pile dataset")
 parser.add_argument("-m", "--model_path", type=str, required=True, help="raw openvino IR (OVModelForCausalLM) export by optimum-cli")
+parser.add_argument("-uc", '--use_cache', type=int, default=1)
 parser.add_argument("act_minmax_path", type=str, help="target pickle file for storing calibration result",
                     default="act_scales/llama-2-7b.pickle")
 
@@ -115,6 +116,7 @@ print(f"calibrating {args.model_path} on {args.dataset_path} ...")
 fc_observations = get_fc_observations(
     model_path = args.model_path,
     dataset_path = args.dataset_path,
+    use_cache=bool(args.use_cache)
 )
 
 print(f"saving fc_observations to {args.act_minmax_path}...")

@@ -68,6 +68,8 @@ if __name__ == "__main__":
     parser.add_argument("-ppl", type=str, default="./wikitext-2-raw/wiki.test.raw")
     parser.add_argument("-c", "--ppl-chunk", type=int, default=512)
     parser.add_argument("-m", '--model_path', type=str, required=True)
+    parser.add_argument("-uc", '--use_cache', type=int, default=1)
+    parser.add_argument("-x", '--speed_up', type=int, default=1)
 
     args = parser.parse_args()
 
@@ -95,7 +97,7 @@ if __name__ == "__main__":
         ov_config=ov_config,
         config=cfg,
         trust_remote_code=True,
-        use_cache=False
+        use_cache=args.use_cache
     )
 
-    perplexity_ov(tok, ov_model, args.ppl, chunk_size = args.ppl_chunk)
+    perplexity_ov(tok, ov_model, args.ppl, chunk_size = args.ppl_chunk, step_size = args.ppl_chunk * args.speed_up)

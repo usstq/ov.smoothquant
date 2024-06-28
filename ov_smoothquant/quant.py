@@ -191,7 +191,7 @@ parser.add_argument("-p", "--prompt", type=str, default="What's oxygen?")
 parser.add_argument("-skip", "--skip", type=str, nargs='*')
 parser.add_argument("-othr", "--outlier_thr", type=float, default=1e9)
 parser.add_argument("-o", "--output_model_path", type=str, help="target model path", default=None)
-
+parser.add_argument("-uc", '--use_cache', type=int, default=1)
 parser.add_argument("-ppl", type=str, default=None)
 
 args = parser.parse_args()
@@ -218,28 +218,15 @@ ov_config = {"PERFORMANCE_HINT": "LATENCY", "NUM_STREAMS": "1", "CACHE_DIR": "",
 ov_config["INFERENCE_PRECISION_HINT"] = "f32"
 
 cfg=AutoConfig.from_pretrained(args.model_path, trust_remote_code=True)
-tok = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
-if tok.pad_token is None:
+try:
+    tok = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
+except:
+    print("No tokenizer")
+    tok = None
+
+if tok and tok.pad_token is None:
     tok.add_special_tokens({'pad_token': '[PAD]'})
     #tok.pad_token = tok.eos_token_id
-ov_model = OVModelForCausalLM.from_pretrained(
-    args.model_path,
-    device=device,
-    ov_config=ov_config,
-    config=cfg,
-    trust_remote_code=True,
-    use_cache=False
-)
-
-def test_one_shot(ov_model, new_tokens = 32):
-    prompt_test = args.prompt
-    result = []
-    inputs = tok(prompt_test, return_tensors="pt", padding=True)
-    answers = ov_model.generate(**inputs, max_new_tokens=new_tokens, min_new_tokens=new_tokens, do_sample=False, temperature=None, top_p=None)
-    for answer in answers:
-        out = tok.decode(answer, skip_special_tokens=True)
-        result.append(out.encode("utf-8")[:512])
-    return result
 
 print("=== quantize fc layers using smooth-quant ===")
 ov_config = {"PERFORMANCE_HINT": "LATENCY", "NUM_STREAMS": "1", "CACHE_DIR": "", "AFFINITY":"CORE"}
@@ -250,8 +237,21 @@ ov_model = OVModelForCausalLM.from_pretrained(
     ov_config=ov_config,
     config=cfg,
     trust_remote_code=True,
-    use_cache=False
+    use_cache=bool(args.use_cache)
 )
+
+def test_one_shot(ov_model, new_tokens = 32):
+    if tok is None:
+        return "???"
+    prompt_test = args.prompt
+    result = []
+    inputs = tok(prompt_test, return_tensors="pt", padding=True)
+    answers = ov_model.generate(**inputs, max_new_tokens=new_tokens, min_new_tokens=new_tokens, do_sample=False, temperature=None, top_p=None)
+    for answer in answers:
+        out = tok.decode(answer, skip_special_tokens=True)
+        result.append(out.encode("utf-8")[:512])
+    return result
+
 ref_answer = test_one_shot(ov_model)
 
 to_smooth_quant_model(ov_model.model, fc_observations, alpha = args.alpha, skip_act_quant_names=args.skip, outlier_thr=args.outlier_thr)
@@ -271,4 +271,5 @@ if args.ppl:
 if args.output_model_path is not None:
     print(f"saving to {args.output_model_path} ...")
     ov_model.save_pretrained(args.output_model_path)
-    tok.save_pretrained(args.output_model_path)
+    if tok:
+        tok.save_pretrained(args.output_model_path)
