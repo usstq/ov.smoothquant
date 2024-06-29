@@ -6,6 +6,8 @@ But it's not easy to keep accuracy of the quantized model, Intel® Neural Compre
 
 OpenVINO backend for HF pipeline is [optimum-intel](https://github.com/huggingface/optimum-intel/), and the model exported by `optimum-cli` only support weight-only quantization of int8(or int4).
 
+In this repo, we are trying to reproduce this work in [OpenVINO](https://github.com/openvinotoolkit/openvino) framework on many important LLM.
+
 according to [neural-compressor](https://github.com/intel/neural-compressor/blob/master/docs/source/smooth_quant.md#validated-models):
 
 | Model/Last token accuracy |  FP32 Accuracy   | INT8 (w/ SmoothQuant) | Notes | ours |
@@ -14,26 +16,30 @@ according to [neural-compressor](https://github.com/intel/neural-compressor/blob
 | facebook/opt-2.7b       | 0.6365 | 0.6404 | alpha=0.5, Ipex 2.0  | 0.6390 `-a 0.5 -skip lm_head` |
 | databricks/dolly-v1-6b* | 0.6866 | 0.6895 | alpha=0.8, Ipex 2.1  | 0.6975 `-a 0.85 -skip lm_head` |
 | LLaMa-2-7b-hf*          | 0.7392 | 0.7335 | alpha=Auto, Ipex 2.1 | 0.7394 `-a 0.85 -skip_act to/Convert mlp.down_proj` |
+| LLaMa-2-13b-hf*         | 0.7677 | 0.7615 | alpha=Auto, Ipex 2.1 | 0.7609 `-a 0.85 -skip_act to/Convert mlp.down_proj` |
 | gpt2-medium             | 0.4306 |        |                      | 0.4002 `-a 0.8 -skip_act lm_ head .3.mlp.c_proj` |
-validattion tools:
- - https://github.com/EleutherAI/lm-evaluation-harness
- - commit e5e5ee0cb629c9c88165292d1b4bf34623392d33
 
-## openai-community/gpt2-medium
-```bash
-$ optimum-cli export openvino --fp16 --task text-generation-with-past -m  openai-community/gpt2-medium ./models/gpt2-medium-ov
-$ lm_eval --model openvino --tasks lambada_openai --model_args pretrained=./models/gpt2-medium-ov,ov_config=ov_config.json
-|lambada_openai|      1|none  |     0|acc       |↑  | 0.4306|±  |0.0069|
-$ python ./ov_smoothquant/calibration.py -m models/gpt2-medium-ov act_scales/gpt2-medium.pickle
-$ python ./ov_smoothquant/quant.py -m models/gpt2-medium-ov -s act_scales/gpt2-medium.pickle -o ./models/gpt2-medium-SQ
-# `-skip_act _`  weight-only quantization cannot preserve accuracy, thus
-# the weight is already difficult to quantize
-|lambada_openai|      1|none  |     0|acc       |↑  | 0.3992|±  |0.0068|
-# -a 0.6 -skip_act lm_head
-|lambada_openai|      1|none  |     0|acc       |↑  | 0.3862|±  |0.0068|
-# -a 0.8 -skip_act lm_head
-|lambada_openai|      1|none  |     0|acc       |↑  | 0.4000|±  |0.0068|
-```
+accuracy validattion is done with [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness), which already support openvino models:
+ - commit ID: e5e5ee0cb629c9c88165292d1b4bf34623392d33
+ - usage: `lm_eval --model openvino --tasks lambada_openai --model_args pretrained=<model_path>,ov_config=ov_config.json`
+
+reproducing procedure:
+ 1. download & convert model with optimum-intel:
+
+    `optimum-cli export openvino --fp16 --task text-generation-with-past -m <model_id> <local_ov_model_path>`
+ 2. evaluate accuracy of original model on lambada_openai dataset:
+
+    `lm_eval --model openvino --tasks lambada_openai --model_args pretrained=<local_ov_model_path>,ov_config=ov_config.json`
+ 3. collect activation min/max on calibration dataset:
+
+    `python ./ov_smoothquant/calibration.py -m=<local_ov_model_path> act_scales/<model_name>.pickle`
+ 4. smooth quantization
+
+    `python ./ov_smoothquant/quant.py -m=<local_ov_model_path> -s act_scales/<model_name>.pickle -o <local_SQ_model_path> -a 0.85 -skip_act ...`
+ 6. evaluate accuracy of quantized model (use similar command line as step 2)
+ 5. optionally, evaluate PPL on wikitest with custom script (faster)
+
+    `python ./ov_smoothquant/ppl.py --f32 -x16 -m <local_ov_model_path>`
 
 ## bloomz-560m
 ```bash
@@ -88,6 +94,37 @@ $ python ./ov_smoothquant/quant.py -m=./models/Llama-2-7b-hf-ov -s act_scales/Ll
 PPL: 5.65 @ chunk 512/8192: 100%|████████████████| 41/41 [00:51<00:00,  1.25s/it]
 |lambada_openai|      1|none  |     0|acc       |↑  |0.7394|±  |0.0061|
 ```
+
+## meta-llama/Llama-2-13b-hf
+```bash
+$ HF_TOKEN=xxx optimum-cli export openvino --fp16 --task text-generation-with-past -m meta-llama/Llama-2-13b-hf ./models/Llama-2-13b-hf-ov
+$ python ./ov_smoothquant/calibration.py -m=./models/Llama-2-13b-hf-ov/ act_scales/Llama-2-13b-hf.pickle
+$ python ./ov_smoothquant/quant.py -m=./models/Llama-2-13b-hf-ov/ -s act_scales/Llama-2-13b-hf.pickle  -o ./models/Llama-2-13b-hf-SQ -a 0.85 -skip_act to/Convert mlp.down_proj
+$ python ./ov_smoothquant/ppl.py --f32 -x16 -m ./models/Llama-2-13b-hf-ov
+PPL: 4.94 @ chunk 512/8192: 100%|██████████████| 41/41 [05:47<00:00,  8.47s/it]
+$ python ./ov_smoothquant/ppl.py --f32 -x16 -m ./models/Llama-2-13b-hf-SQ
+PPL: 4.96 @ chunk 512/8192: 100%|██████████████| 41/41 [03:17<00:00,  4.81s/it]
+$ lm_eval --model openvino --tasks lambada_openai --model_args pretrained=./models/Llama-2-13b-hf-SQ,ov_config=ov_config.json
+|lambada_openai|      1|none  |     0|acc       |↑  |0.7609|±  |0.0059|
+```
+## openai-community/gpt2-medium
+
+```bash
+$ optimum-cli export openvino --fp16 --task text-generation-with-past -m  openai-community/gpt2-medium ./models/gpt2-medium-ov
+$ lm_eval --model openvino --tasks lambada_openai --model_args pretrained=./models/gpt2-medium-ov,ov_config=ov_config.json
+|lambada_openai|      1|none  |     0|acc       |↑  | 0.4306|±  |0.0069|
+$ python ./ov_smoothquant/calibration.py -m models/gpt2-medium-ov act_scales/gpt2-medium.pickle
+$ python ./ov_smoothquant/quant.py -m models/gpt2-medium-ov -s act_scales/gpt2-medium.pickle -o ./models/gpt2-medium-SQ
+# `-skip_act _`  weight-only quantization cannot preserve accuracy, thus
+# the weight is already difficult to quantize
+|lambada_openai|      1|none  |     0|acc       |↑  | 0.3992|±  |0.0068|
+# -a 0.6 -skip_act lm_head
+|lambada_openai|      1|none  |     0|acc       |↑  | 0.3862|±  |0.0068|
+# -a 0.8 -skip_act lm_head
+|lambada_openai|      1|none  |     0|acc       |↑  | 0.4000|±  |0.0068|
+```
+
+**this model is unfriendly to weight quantization, per-OC weight-only quantization would cause accuracy drop by 7%**
 
 ## Llama-2-7b
 To keep accuracy better, we need:
