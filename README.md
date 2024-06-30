@@ -6,7 +6,7 @@ But it's not easy to keep accuracy of the quantized model, Intel® Neural Compre
 
 OpenVINO backend for HF pipeline is [optimum-intel](https://github.com/huggingface/optimum-intel/), and the model exported by `optimum-cli` only support weight-only quantization of int8(or int4).
 
-In this repo, we are trying to reproduce this work in [OpenVINO](https://github.com/openvinotoolkit/openvino) framework on many important LLM.
+In this repo, we are trying to implement SmoothQuant in [OpenVINO](https://github.com/openvinotoolkit/openvino) framework on many important LLM. this requires changes of model IR only, no change to OpenVINO's source code is required.
 
 according to [neural-compressor](https://github.com/intel/neural-compressor/blob/master/docs/source/smooth_quant.md#validated-models):
 
@@ -17,7 +17,10 @@ according to [neural-compressor](https://github.com/intel/neural-compressor/blob
 | databricks/dolly-v1-6b* | 0.6866 | 0.6895 | alpha=0.8, Ipex 2.1  | 0.6975 `-a 0.85 -skip lm_head` |
 | LLaMa-2-7b-hf*          | 0.7392 | 0.7335 | alpha=Auto, Ipex 2.1 | 0.7394 `-a 0.85 -skip_act to/Convert mlp.down_proj` |
 | LLaMa-2-13b-hf*         | 0.7677 | 0.7615 | alpha=Auto, Ipex 2.1 | 0.7609 `-a 0.85 -skip_act to/Convert mlp.down_proj` |
+| EleutherAI/gpt-j-6B*    | 0.6831 | 0.6821 | alpha=1.0, Ipex 2.1  | 0.6790 `-a 0.85 -skip_act lm_head h.2.mlp.fc_out`|
 | gpt2-medium             | 0.4306 |        |                      | 0.4002 `-a 0.8 -skip_act lm_ head .3.mlp.c_proj` |
+
+> we can see, to keep accuracy, some layers need to use per-token activation-quantization, otherwise they have to fallback to weight-only quantization using `-skip_act`, these layers have much higher magnitude outliers comparing to normal layers. and they often appear in the last FC of MLP layer.
 
 accuracy validattion is done with [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness), which already support openvino models:
  - commit ID: e5e5ee0cb629c9c88165292d1b4bf34623392d33
@@ -107,6 +110,22 @@ PPL: 4.96 @ chunk 512/8192: 100%|██████████████| 41/
 $ lm_eval --model openvino --tasks lambada_openai --model_args pretrained=./models/Llama-2-13b-hf-SQ,ov_config=ov_config.json
 |lambada_openai|      1|none  |     0|acc       |↑  |0.7609|±  |0.0059|
 ```
+
+## EleutherAI/gpt-j-6B
+```bash
+$ optimum-cli export openvino --fp16 --task text-generation-with-past -m EleutherAI/gpt-j-6B ./models/gpt-j-6B-ov
+$ python ./ov_smoothquant/calibration.py -m=./models/gpt-j-6B-ov act_scales/gpt-j-6b.pickle
+$ python ./ov_smoothquant/quant.py -m=./models/gpt-j-6B-ov -s act_scales/gpt-j-6b.pickle  -o ./models/gpt-j-6B-SQ -a 0.85 -skip_act lm_head
+$ python ./ov_smoothquant/ppl.py --f32 -x16 -m ./models/gpt-j-6B-ov
+PPL: 8.29 @ chunk 512/8192: 100%|█████████████| 35/35 [02:28<00:00,  4.25s/it]
+$ python ./ov_smoothquant/ppl.py --f32 -x16 -m ./models/gpt-j-6B-SQ
+PPL: 8.41 @ chunk 512/8192: 100%|█████████████| 35/35 [00:34<00:00,  1.03it/s]
+$ python ./ov_smoothquant/quant.py -m=./models/gpt-j-6B-ov -s act_scales/gpt-j-6b.pickle  -o ./models/gpt-j-6B-SQ -a 0.85 -skip_act lm_head h.2.mlp.fc_out
+PPL: 8.31 @ chunk 512/8192: 100%|█████████████| 35/35 [00:33<00:00,  1.04it/s]
+$ lm_eval --model openvino --tasks lambada_openai --model_args pretrained=./models/gpt-j-6B-SQ,ov_config=ov_config.json
+|lambada_openai|      1|none  |     0|acc       |↑  |0.6790|±  |0.0065|
+```
+
 ## openai-community/gpt2-medium
 
 ```bash
