@@ -11,6 +11,26 @@ import tqdm
 import pickle, sys, time, argparse
 from ppl import perplexity_ov
 
+
+def get_fc_weight(node):
+    if node.get_type_name() != "MatMul":
+        return None
+
+    act_out = node.input_value(0)
+
+    # weight matrix: [OC, IC]
+    const_weight = node.input_value(1).get_node()
+    if const_weight.get_type_name() == "Convert":
+        const_weight = const_weight.input_value(0).get_node()
+    assert(const_weight.get_type_name() == "Constant")
+
+    weight = const_weight.data.astype(np.float32)
+
+    act_rank = len(act_out.get_partial_shape())
+    IC = act_out.get_partial_shape().get_dimension(act_rank-1).get_length()
+    assert(IC == weight.shape[1])
+    return weight
+
 def to_smooth_quant_model(model, fc_observations, skip_act_quant_names=[], skip_quant_names=[], act_quant_sym = False, outlier_thr = 1e9, alpha = 0.8):
     # Simple: for Extensions. Without any classes and inheritance.
     def pattern_replacement():
@@ -27,32 +47,52 @@ def to_smooth_quant_model(model, fc_observations, skip_act_quant_names=[], skip_
             if not root.get_friendly_name() in fc_observations:
                 return False
 
-            #if not "__module.model.layers.1.mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
-            #    return False
-            # __module.model.transformer.h.2.mlp.fc_out/aten::linear/MatMul
+            # collect all FCs sharing same activation
+            fc_nodes = []
+            X_min = None
+            X_max = None
+            X_absmax = None
+            W_absmax = None
+            quant_activation = True
+            per_token_quant = False
 
-            X_min = fc_observations[root.get_friendly_name()]["min"]
-            X_max = fc_observations[root.get_friendly_name()]["max"]
-            X_absmax = fc_observations[root.get_friendly_name()]["absmax"]
+            for iput in pvm[act].get_target_inputs():
+                fc_node = iput.get_node()
+                fc_weight = get_fc_weight(fc_node)
+                if fc_weight is not None:
+                    tag = fc_node.get_friendly_name()
 
-            # weight matrix: [OC, IC]
-            const_weight = pvm[wei].get_node()
-            if const_weight.get_type_name() == "Convert":
-                const_weight = const_weight.input_value(0).get_node()
-            assert(const_weight.get_type_name() == "Constant")
+                    # skip any FC in group will skip whole group!
+                    # since they share same activation
+                    if skip_act_quant_names is not None:
+                        for skip_name in skip_act_quant_names:
+                            if skip_name in tag:
+                                quant_activation = False
+                    if skip_quant_names is not None:
+                        for skip_name in skip_quant_names:
+                            if skip_name in tag:
+                                print(f"\t skipped {tag}")
+                                return False
+                    #if "mlp.down_proj" in root.get_friendly_name():
+                    #    #quant_activation = False
+                    #    per_token_quant = True
+                    #    pass
 
-            weight = const_weight.data.astype(np.float32)
-
-            act_rank = len(pvm[act].get_partial_shape())
-            IC = pvm[act].get_partial_shape().get_dimension(act_rank-1).get_length()
-            assert(IC == weight.shape[1])
-
-            OC = weight.shape[0]
+                    # merge all observations
+                    if X_min is None:
+                        X_min = fc_observations[tag]["min"]
+                        X_max = fc_observations[tag]["max"]
+                        X_absmax = fc_observations[tag]["absmax"]
+                        W_absmax = abs(fc_weight).max(0).clip(min=1e-5)
+                    else:
+                        X_min = np.minimum(X_min, fc_observations[tag]["min"])
+                        X_max = np.maximum(X_max, fc_observations[tag]["max"])
+                        X_absmax = np.maximum(X_absmax, fc_observations[tag]["absmax"])
+                        W_absmax = np.maximum(W_absmax, abs(fc_weight).max(0).clip(min=1e-5))
+                    fc_nodes.append((fc_node, fc_weight))
 
             # smooth-quant:
-            weight_abs_max = abs(weight).max(0).clip(min=1e-5)
             X_absmax = X_absmax.clip(min=1e-5)
-            # assert(X_absmax.min() > 0)
 
             # s : each IC channel of weight matrix * s
             # use big alpha, for bigger outlier |X|, so x_scale can scale it down further
@@ -61,55 +101,13 @@ def to_smooth_quant_model(model, fc_observations, skip_act_quant_names=[], skip_
             #per_channel_alpha[X_absmax > 10] = 0.7
             #per_channel_alpha[X_absmax > 100] = 0.8
 
-            layer_id = 0 # int(root.get_friendly_name().split(".")[3])
-            quant_activation = True
-            if skip_act_quant_names is not None:
-                for skip_name in skip_act_quant_names:
-                    if skip_name in root.get_friendly_name():
-                        quant_activation = False
-
-            if skip_quant_names is not None:
-                for skip_name in skip_quant_names:
-                    if skip_name in root.get_friendly_name():
-                        print(f"\t skipped {root.get_friendly_name()}")
-                        return False
-
-            '''
-            if ".mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
-                layer_id = int(root.get_friendly_name().split(".")[3])
-                # layer_id == 25 : PPL: 5.65
-                # PPL: 5.67   0.85
-                if layer_id >= 0:
-                    per_channel_alpha = 0.85
-                    quant_activation = True
-                if layer_id == 1 or layer_id >= 25:
-                    per_channel_alpha = 0.87
-                    quant_activation = True
-
-            if "__module.model.layers.1.mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
-                quant_activation = False
-            #if "__module.model.layers.30.mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
-            #    quant_activation = False
-            #if "__module.model.layers.31.mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
-                #quant_activation = False
-            #    per_channel_alpha = 0.6
-            if "__module.model.layers.8.mlp.down_proj/aten::linear/MatMul" in root.get_friendly_name():
-                #quant_activation = False
-                per_channel_alpha = 0.8
-            '''
-
             px = pow(X_absmax, per_channel_alpha)
-            pw = pow(weight_abs_max, 1 - per_channel_alpha)
+            pw = pow(W_absmax, 1 - per_channel_alpha)
             # pw = px
             smoothquant_w_scales = (px / pw).clip(min=1e-5)
             smoothquant_x_scales = 1/smoothquant_w_scales
 
-            per_token_quant = False
-            #if "mlp.down_proj" in root.get_friendly_name():
-            #    #quant_activation = False
-            #    per_token_quant = True
-            #    pass
-
+            '''
             # clear outlier channel from quantization branch
             outlier_idx = (X_absmax > outlier_thr)
             outlier_cnt = outlier_idx.sum()
@@ -120,35 +118,21 @@ def to_smooth_quant_model(model, fc_observations, skip_act_quant_names=[], skip_
                 outlier_result = opset.matmul(outlier_gather, op.Constant(weight[:, outlier_idx]), transpose_a, transpose_b, name = root.get_friendly_name()+"_outlier") 
             else:
                 outlier_result = None
+            '''
 
             # [OC, IC] * [IC]
             if quant_activation:
-                weight = weight * smoothquant_w_scales
-                act_smoothed = opset.multiply(pvm[act], op.Constant(smoothquant_x_scales))
                 x_min_per_tensor = (X_min * smoothquant_x_scales).min()
                 x_max_per_tensor = (X_max * smoothquant_x_scales).max()
-            else:
-                act_smoothed = pvm[act]
-                x_min_per_tensor = X_min.min()
-                x_max_per_tensor = X_max.max()
+                # symmetrical quantization has lower accuracy than asymmetrical
+                if act_quant_sym:
+                    absmax = max(abs(x_min_per_tensor), abs(x_max_per_tensor))
+                    x_min_per_tensor = -absmax
+                    x_max_per_tensor = absmax
 
-            # quantize weight to INT8 on per-OC basis
-            # per-tensor quantized is not working
-            # w_deq_scales = np.array(abs(weight).max() / 127, dtype=np.float32)
-            # per-OC quantized works well
-            w_deq_scales = abs(weight).max(1, keepdims=True) / 127
-            weight_quant = (weight / w_deq_scales).round().astype(np.int8)
-            w_deq = opset.multiply(opset.convert(op.Constant(weight_quant), Type.f32), op.Constant(w_deq_scales))
+                act_smoothed = opset.multiply(pvm[act], op.Constant(smoothquant_x_scales))
 
-            # symmetrical quantization has lower accuracy than asymmetrical
-            if act_quant_sym:
-                absmax = max(abs(x_min_per_tensor), abs(x_max_per_tensor))
-                x_min_per_tensor = -absmax
-                x_max_per_tensor = absmax
-
-            if quant_activation:
                 levels = np.int32(256)
-
                 if per_token_quant:
                     # per-token dynamic, need special impl
                     absmax_per_token = opset.reduce_max(opset.absolute(act_smoothed), [0, 1], keep_dims = True)
@@ -163,25 +147,38 @@ def to_smooth_quant_model(model, fc_observations, skip_act_quant_names=[], skip_
                     output_low = np.array(x_min_per_tensor, dtype=np.float32)
                     output_high = np.array(x_max_per_tensor, dtype=np.float32)
 
-                act_fq = opset.fake_quantize(act_smoothed,
+                node_act = opset.fake_quantize(act_smoothed,
                                             input_low,
                                             input_high,
                                             output_low,
                                             output_high,
                                             levels)
-                new_matmul = opset.matmul(act_fq, w_deq, transpose_a, transpose_b, name = root.get_friendly_name())
+                
             else:
-                new_matmul = opset.matmul(act_smoothed, w_deq, transpose_a, transpose_b, name = root.get_friendly_name())
-            
-            if outlier_result is not None:
-                new_matmul = opset.add(new_matmul, outlier_result, name="AddOutlier")
-
-            replace_node(root, new_matmul)
+                node_act = pvm[act]
+                x_min_per_tensor = X_min.min()
+                x_max_per_tensor = X_max.max()
 
             X_maxabs_thr = max(10*X_absmax.mean(), 30)
             quant_flag = f"Q{'A' if quant_activation else '_'}W"
+            print(f"{quant_flag} [x:{smoothquant_x_scales.min():.2f}~{smoothquant_x_scales.max():.2f} w:{smoothquant_w_scales.min():.2f}~{smoothquant_w_scales.max():.2f}]  {X_min.min():.2f}~{X_max.max():.2f} =>  {x_min_per_tensor:.2f}~{x_max_per_tensor:.2f} mean:{X_absmax.mean():.3f}  big:{X_absmax[X_absmax > X_maxabs_thr]}")
 
-            print(f"{quant_flag} Outlier:{outlier_cnt} {layer_id} {root.get_friendly_name()} [x:{smoothquant_x_scales.min():.2f}~{smoothquant_x_scales.max():.2f} w:{smoothquant_w_scales.min():.2f}~{smoothquant_w_scales.max():.2f}]  {X_min.min():.2f}~{X_max.max():.2f} =>  {x_min_per_tensor:.2f}~{x_max_per_tensor:.2f} mean:{X_absmax.mean():.3f}  big:{X_absmax[X_absmax > X_maxabs_thr]}")
+            for fc_node, weight in fc_nodes:
+                # quantize weight to INT8 on per-OC basis (per-tensor is not enough)
+                if quant_activation:
+                    weight = weight * smoothquant_w_scales
+                w_deq_scales = abs(weight).max(1, keepdims=True) / 127
+                weight_quant = (weight / w_deq_scales).round().astype(np.int8)
+                w_deq = opset.multiply(opset.convert(op.Constant(weight_quant), Type.f32), op.Constant(w_deq_scales))
+
+
+                new_matmul = opset.matmul(node_act, w_deq, transpose_a, transpose_b, name = fc_node.get_friendly_name())
+                replace_node(fc_node, new_matmul)
+
+                #if outlier_result is not None:
+                #    new_matmul = opset.add(new_matmul, outlier_result, name="AddOutlier")
+                print(f"\t {new_matmul.get_friendly_name()}")
+
             return True
         return Matcher(matmul, "SimpleReplacement"), callback
     manager = Manager()
