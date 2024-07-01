@@ -10,7 +10,7 @@ In this repo, we are trying to implement SmoothQuant in [OpenVINO](https://githu
 
 according to [neural-compressor](https://github.com/intel/neural-compressor/blob/master/docs/source/smooth_quant.md#validated-models):
 
-| Model/Last token accuracy |  FP32 Accuracy   | INT8 (w/ SmoothQuant) | Notes | ours |
+| Model/Last token accuracy |  FP32 Accuracy   | INT8 (IPEX SmoothQuant) | Notes | ours |
 |:----------:|:------:|:------:|-----------------------------------|:------:|
 | bigscience/bloomz-560m  | 0.3947 | 0.3930 | alpha=0.8, Ipex 2.1  | 0.3914 `-a 0.8 -skip lm_head` |
 | facebook/opt-2.7b       | 0.6365 | 0.6404 | alpha=0.5, Ipex 2.0  | 0.6390 `-a 0.5 -skip lm_head` |
