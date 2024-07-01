@@ -46,8 +46,8 @@ reproducing procedure:
 
 ## bloomz-560m
 ```bash
-$ optimum-cli export openvino --fp16 --task text-generation-with-past -m bigscience/bloomz-560m/ bloomz-560m-ov
-$ python ./ov_smoothquant/calibration.py -m /home/tingqian/tingqian/models/bloomz-560m-ov act_scales/bloomz-560m.pickle
+$ optimum-cli export openvino --fp16 --task text-generation-with-past -m bigscience/bloomz-560m ./models/bloomz-560m-ov
+$ python ./ov_smoothquant/calibration.py -m ./models/bloomz-560m-ov act_scales/bloomz-560m.pickle
 $ python ./ov_smoothquant/quant.py -m ./models/bloomz-560m-ov -s act_scales/bloomz-560m.pickle -o ./models/bloomz-560m-SQ -a 0.8 -skip lm_head
 $ lm_eval --model openvino --model_args pretrained=./models/bloomz-560m-SQ --tasks lambada_openai
 |lambada_openai|      1|none  |     0|acc       |↑  | 0.3128|±  |0.0065|
