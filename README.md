@@ -39,10 +39,15 @@ reproducing procedure:
  4. smooth quantization
 
     `python ./ov_smoothquant/quant.py -m=<local_ov_model_path> -s act_scales/<model_name>.pickle -o <local_SQ_model_path> -a 0.85 -skip_act ...`
- 6. evaluate accuracy of quantized model (use similar command line as step 2)
- 5. optionally, evaluate PPL on wikitest with custom script (faster)
+ 5. evaluate accuracy of quantized model (use similar command line as step 2)
+ 6. optionally, evaluate PPL on wikitest with custom script (faster)
 
     `python ./ov_smoothquant/ppl.py --f32 -x16 -m <local_ov_model_path>`
+ 7. run inference:
+
+    `OV_CPU_PROFILE=1  python ./ov_smoothquant/eval.py -m ./models/Llama-2-7b-hf-SQ -p 1024 -n 16 -b 1 1 1 --f32`
+    `OV_CPU_PROFILE=1  python ./ov_smoothquant/eval.py -m ./models/Llama-2-7b-hf-SQ -p "What's Oxygen?" -n 16 -b 1 1 1 --f32`
+ 
 
 ## bloomz-560m
 ```bash
@@ -196,9 +201,9 @@ python ./ov_smoothquant/quant.py -m /home/sdp/huyuan/dlboost_models/llama-2-7b-c
 python ./ov_smoothquant/quant.py -m /home/sdp/huyuan/dlboost_models/gpt-j-6b/pytorch/FP32/ -s ./act_scales/gpt-j-6b.pickle -o ./models/gpt-j-6b-SQ -a 0.85 --skip h.2.mlp.fc_out
 
 # evaluate PPL
-python ov_smoothquant/eval.py /home/sdp/huyuan/dlboost_models/gpt-j-6b/pytorch/FP32/ -ppl wikitext-2-raw/wiki.test.raw -c 128
+python ov_smoothquant/eval.py -m /home/sdp/huyuan/dlboost_models/gpt-j-6b/pytorch/FP32/ -ppl wikitext-2-raw/wiki.test.raw -c 128
 PPL: 13.02 @ ppl-chunk 128: 
 
-python ov_smoothquant/eval.py ./models/gpt-j-6b-SQ/ -ppl wikitext-2-raw/wiki.test.raw -c 128
+python ov_smoothquant/eval.py -m ./models/gpt-j-6b-SQ/ -ppl wikitext-2-raw/wiki.test.raw -c 128
 PPL: 13.64 @ ppl-chunk 128  0.85
 ```

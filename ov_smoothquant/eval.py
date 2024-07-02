@@ -84,13 +84,12 @@ parser.add_argument('-v', '--verbose', action="store_true")
 parser.add_argument('-s', '--smaps', action="store_true")
 parser.add_argument('-r', '--repeats', type=int, default=1)
 parser.add_argument('-e', '--export', action="store_true")
-
+parser.add_argument("-m", "--model_path", type=str, required=True, help="openvino IR (OVModelForCausalLM)")
 parser.add_argument('-kvq', '--kvquant', action="store_true")
 
 parser.add_argument("-ppl", type=str, default=None)
 parser.add_argument("-c", "--ppl-chunk", type=int, default=512)
 
-parser.add_argument('model_path')
 
 args = parser.parse_args()
 prompt = args.prompt
